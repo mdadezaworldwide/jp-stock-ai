@@ -216,6 +216,123 @@ def get_signal_table():
     return sig_df
 
 
+def _show_signal_table(sig_df):
+    """シグナルテーブルを表示"""
+    def highlight_signal(row):
+        v = str(row["判定"])
+        if v == "BUY" or "強い買い" in v:
+            return ["background-color: #d4edda"] * len(row)
+        elif "買い" in v:
+            return ["background-color: #e8f5e9"] * len(row)
+        elif "売り" in v:
+            return ["background-color: #f8d7da"] * len(row)
+        return [""] * len(row)
+
+    st.dataframe(
+        sig_df.style.apply(highlight_signal, axis=1).format({
+            "終値": "{:,.0f}",
+            "シグナル確率": "{:.1%}",
+            "RSI": "{:.1f}",
+            "MACD": "{:.2f}",
+        }),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    with st.expander("指標の見方（シグナル確率 / RSI / MACD）"):
+        st.markdown("""
+#### シグナル確率（AIの総合判断）
+この銘柄が保有日数以内に目標リターン以上上がる確率をAIが90個の特徴量から予測した数値です。
+
+| シグナル確率 | 意味 |
+|---|---|
+| **70%以上** | 強い買いシグナル（自信あり） |
+| **60〜70%** | 買いシグナル |
+| **50〜60%** | 弱い買いシグナル（他の指標も確認） |
+| **50%未満** | 見送り |
+
+---
+#### RSI / MACD
+| RSI | 意味 |  | MACD | 意味 |
+|---|---|---|---|---|
+| 70以上 | 買われすぎ | | プラス増加 | 上昇加速 |
+| 30以下 | 売られすぎ | | プラス減少 | 上昇鈍化 |
+| 40〜60 | 普通 | | マイナス減少 | 下落加速 |
+| | | | マイナス増加 | 下落止まる |
+
+---
+#### 推奨保有期間
+| 推奨 | 条件 |
+|---|---|
+| **短期（5〜7日）** | ボラティリティ高い / RSI極端 |
+| **中期（15〜20日）** | トレンド形成中 / 移動平均上向き |
+| **長期（30〜60日）** | パーフェクトオーダー成立 |
+""")
+
+
+def _show_ai_chat(sig_df):
+    """AIチャットを表示"""
+    import anthropic
+    _DEFAULT_KEY = "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"
+    ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", _DEFAULT_KEY)
+    if not ANTHROPIC_KEY:
+        return
+
+    st.markdown("---")
+    st.subheader("AIに質問する")
+    st.caption("「2番はなんで買いシグナル？」のように番号で質問できます")
+
+    table_text = sig_df.to_string(index=False)
+    chat_system = f"""あなたは日本株の専門アナリストAIです。
+以下はAIシグナルシステムの現在の売買シグナル一覧です。ユーザーが「2番」「No.3」などと言ったら、この表のNo.列を参照してください。
+
+--- 売買シグナル一覧 ---
+{table_text}
+--- ここまで ---
+
+回答ルール:
+- 上記テーブルのデータを使って具体的な数値で根拠を示す
+- シグナル確率、RSI、MACD、RSI判定、MACD判定、推奨保有、保有理由の値を引用する
+- 「買い」「売り」「保有」の判断を明確に述べる
+- リスクも必ず言及する
+- 日本語で簡潔に回答する"""
+
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = []
+
+    for msg in st.session_state.chat_messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    if prompt := st.chat_input("例: 2番はなんで買いシグナル？ / トヨタは今買い時？"):
+        st.session_state.chat_messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        with st.chat_message("assistant"):
+            with st.spinner("分析中..."):
+                try:
+                    client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+                    messages = [{"role": m["role"], "content": m["content"]}
+                                for m in st.session_state.chat_messages[-8:]]
+                    response = client.messages.create(
+                        model="claude-haiku-4-5-20251001",
+                        max_tokens=1500,
+                        system=chat_system,
+                        messages=messages,
+                    )
+                    reply = response.content[0].text
+                except Exception as e:
+                    reply = f"エラー: {e}"
+
+                st.markdown(reply)
+                st.session_state.chat_messages.append({"role": "assistant", "content": reply})
+
+    if st.button("チャット履歴をクリア"):
+        st.session_state.chat_messages = []
+        st.rerun()
+
+
 # ========== シグナル ==========
 if page == "シグナル":
     st.title("売買シグナル")
@@ -244,147 +361,92 @@ if page == "シグナル":
     try:
         sig_df = get_signal_table()
 
-        # 買いシグナルをハイライト
-        buy_count = sig_df["判定"].str.contains("買い|BUY", na=False).sum()
-        col1, col2, col3 = st.columns(3)
-        col1.metric("買いシグナル", f"{buy_count}銘柄")
-        col2.metric("分析銘柄数", f"{len(sig_df)}銘柄")
-        col3.metric("閾値", "50%")
-
-        def highlight_signal(row):
-            v = str(row["判定"])
-            if v == "BUY" or "強い買い" in v:
-                return ["background-color: #d4edda"] * len(row)
-            elif "買い" in v:
-                return ["background-color: #e8f5e9"] * len(row)
-            elif "売り" in v:
-                return ["background-color: #f8d7da"] * len(row)
-            return [""] * len(row)
-
-        st.dataframe(
-            sig_df.style.apply(highlight_signal, axis=1).format({
-                "終値": "{:,.0f}",
-                "シグナル確率": "{:.1%}",
-                "RSI": "{:.1f}",
-                "MACD": "{:.2f}",
-            }),
-            use_container_width=True,
-            hide_index=True,
+        # 期間別シグナル率
+        period_label = st.radio(
+            "過去の買いシグナル率を表示",
+            ["現在のシグナル", "1週間", "1か月", "3か月"],
+            horizontal=True,
         )
 
-        # 指標の説明
-        with st.expander("指標の見方（シグナル確率 / RSI / MACD）"):
-            st.markdown("#### シグナル確率（AIの総合判断）")
-            st.markdown("""
-この銘柄が保有日数以内に目標リターン以上 上がる確率をAIが90個の特徴量から予測した数値です。
+        if period_label != "現在のシグナル":
+            period_map = {"1週間": 5, "1か月": 20, "3か月": 60}
+            lookback = period_map[period_label]
 
-| シグナル確率 | 意味 |
-|---|---|
-| **70%以上** | 強い買いシグナル（自信あり） |
-| **60〜70%** | 買いシグナル |
-| **50〜60%** | 弱い買いシグナル（他の指標も確認） |
-| **50%未満** | 見送り |
-""")
-            st.markdown("---")
-            col_r, col_m = st.columns(2)
-            with col_r:
-                st.markdown("#### RSI（買われすぎ / 売られすぎ）")
-                st.markdown("""
-| RSI | 意味 |
-|---|---|
-| **70以上** | 買われすぎ → そろそろ下がるかも |
-| **30以下** | 売られすぎ → そろそろ上がるかも |
-| 40〜60 | 普通 |
-""")
-            with col_m:
-                st.markdown("#### MACD（トレンドの勢い）")
-                st.markdown("""
-| MACD | 意味 |
-|---|---|
-| **プラスで増加中** | 上昇の勢いが加速 |
-| プラスで減少中 | 上昇の勢いが鈍化 |
-| **マイナスで減少中** | 下落の勢いが加速 |
-| マイナスで増加中 | 下落が止まりつつある |
-""")
-            st.markdown("---")
-            st.markdown("#### 推奨保有期間")
-            st.markdown("""
-銘柄ごとのトレンド強度・ボラティリティ・移動平均の並びから、最適な保有期間をAIが判定します。
+            @st.cache_data(ttl=3600, show_spinner=False)
+            def calc_signal_history(days):
+                """過去N日間の買いシグナル率を銘柄ごとに算出"""
+                df_sig = compute_signals()
+                result = []
+                for ticker in df_sig["Ticker"].unique():
+                    td = df_sig[df_sig["Ticker"] == ticker].tail(days)
+                    if td.empty:
+                        continue
+                    buy_days = (td["Signal"] == 1).sum()
+                    total_days = len(td)
+                    buy_rate = buy_days / total_days if total_days > 0 else 0
+                    latest = td.iloc[-1]
+                    name = TICKER_NAMES.get(ticker, ticker)
+                    result.append({
+                        "No.": 0,
+                        "銘柄": name,
+                        "ティッカー": ticker,
+                        "セクター": TICKER_SECTORS.get(ticker, "カスタム"),
+                        "終値": latest["Close"],
+                        f"買いシグナル率({period_label})": buy_rate,
+                        "BUY日数": f"{buy_days}/{total_days}日",
+                        "現在の確率": latest["Signal_prob"],
+                        "RSI": latest.get("RSI_14", np.nan),
+                        "MACD": latest.get("MACD_hist", np.nan),
+                    })
+                hist_df = pd.DataFrame(result)
+                hist_df = hist_df.sort_values(f"買いシグナル率({period_label})", ascending=False)
+                hist_df = hist_df.reset_index(drop=True)
+                hist_df["No."] = range(1, len(hist_df) + 1)
+                return hist_df
 
-| 推奨 | 条件 |
-|---|---|
-| **短期（5〜7日）** | ボラティリティが高い / RSIが極端 / 短期リバウンド狙い |
-| **中期（15〜20日）** | トレンド形成中 / 移動平均が上向き |
-| **長期（30〜60日）** | パーフェクトオーダー成立 / 非常に強い上昇トレンド |
-""")
-            st.markdown("---")
-            st.markdown("""
-**シグナルとの組み合わせ:**
-- BUY 70%以上 → そのまま買い
-- BUY 50〜60% + RSI 30〜50 + MACD上昇中 → 有望（まだ安い＋勢いあり）
-- BUY + RSI 70超え → 過熱気味、慎重に
-- BUY + MACD大きくマイナス → まだ下落中、エントリーは待ちもあり
-""")
+            with st.spinner(f"過去{period_label}の分析中..."):
+                hist_df = calc_signal_history(lookback)
 
-        # === AIチャット（シグナルページ内） ===
-        st.markdown("---")
-        st.subheader("AIに質問する")
-        st.caption("「2番はなんで買いシグナル？」のように番号で質問できます")
+            rate_col = f"買いシグナル率({period_label})"
+            high_rate = (hist_df[rate_col] >= 0.5).sum()
+            col1, col2, col3 = st.columns(3)
+            col1.metric(f"高シグナル率(50%+)", f"{high_rate}銘柄")
+            col2.metric("分析銘柄数", f"{len(hist_df)}銘柄")
+            col3.metric("期間", period_label)
 
-        import anthropic
-        _DEFAULT_KEY = "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"
-        ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", _DEFAULT_KEY)
+            def color_rate(row):
+                r = row[rate_col]
+                if r >= 0.7:
+                    return ["background-color: #d4edda"] * len(row)
+                elif r >= 0.5:
+                    return ["background-color: #e8f5e9"] * len(row)
+                elif r <= 0.1:
+                    return ["background-color: #f8d7da"] * len(row)
+                return [""] * len(row)
 
-        if ANTHROPIC_KEY:
-            table_text = sig_df.to_string(index=False)
-            chat_system = f"""あなたは日本株の専門アナリストAIです。
-以下はAIシグナルシステムの現在の売買シグナル一覧です。ユーザーが「2番」「No.3」などと言ったら、この表のNo.列を参照してください。
+            st.dataframe(
+                hist_df.style.apply(color_rate, axis=1).format({
+                    "終値": "{:,.0f}",
+                    rate_col: "{:.0%}",
+                    "現在の確率": "{:.1%}",
+                    "RSI": "{:.1f}",
+                    "MACD": "{:.2f}",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            # 現在のシグナル（従来通り）
+            buy_count = sig_df["判定"].str.contains("買い|BUY", na=False).sum()
+            col1, col2, col3 = st.columns(3)
+            col1.metric("買いシグナル", f"{buy_count}銘柄")
+            col2.metric("分析銘柄数", f"{len(sig_df)}銘柄")
+            col3.metric("閾値", "50%")
 
---- 売買シグナル一覧 ---
-{table_text}
---- ここまで ---
+            _show_signal_table(sig_df)
 
-回答ルール:
-- 上記テーブルのデータを使って具体的な数値で根拠を示す
-- シグナル確率、RSI、MACD、RSI判定、MACD判定、推奨保有、保有理由の値を引用する
-- 「買い」「売り」「保有」の判断を明確に述べる
-- リスクも必ず言及する
-- 日本語で簡潔に回答する"""
-
-            if "chat_messages" not in st.session_state:
-                st.session_state.chat_messages = []
-
-            for msg in st.session_state.chat_messages:
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
-
-            if prompt := st.chat_input("例: 2番はなんで買いシグナル？ / トヨタは今買い時？"):
-                st.session_state.chat_messages.append({"role": "user", "content": prompt})
-                with st.chat_message("user"):
-                    st.markdown(prompt)
-
-                with st.chat_message("assistant"):
-                    with st.spinner("分析中..."):
-                        try:
-                            client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
-                            messages = [{"role": m["role"], "content": m["content"]}
-                                        for m in st.session_state.chat_messages[-8:]]
-                            response = client.messages.create(
-                                model="claude-haiku-4-5-20251001",
-                                max_tokens=1500,
-                                system=chat_system,
-                                messages=messages,
-                            )
-                            reply = response.content[0].text
-                        except Exception as e:
-                            reply = f"エラー: {e}"
-
-                        st.markdown(reply)
-                        st.session_state.chat_messages.append({"role": "assistant", "content": reply})
-
-            if st.button("チャット履歴をクリア"):
-                st.session_state.chat_messages = []
-                st.rerun()
+        # AIチャット（常に表示）
+        _show_ai_chat(sig_df)
 
     except Exception as e:
         st.error(f"モデル読み込みエラー: {e}")

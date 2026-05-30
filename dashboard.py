@@ -26,10 +26,9 @@ from config import TICKERS, TICKER_NAMES, TICKER_SECTORS, HOLD_DAYS, TARGET_RETU
 from data_fetcher import fetch_stock_data
 from features import prepare_features, get_feature_columns
 
-# コピー時の通知を非表示
+# コピー時のトースト通知のみ非表示（エラーメッセージは残す）
 st.markdown("""<style>
     [data-testid="stNotification"] { display: none !important; }
-    .stAlert { display: none !important; }
     div[data-baseweb="toast"] { display: none !important; }
 </style>""", unsafe_allow_html=True)
 

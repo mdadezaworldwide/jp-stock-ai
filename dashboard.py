@@ -368,14 +368,90 @@ AIニュース分析（3個）:
             st.markdown(prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("分析中..."):
+            with st.spinner("深層分析中（IR・決算・財務を読み込み中）..."):
+                # 質問から銘柄を特定して深層分析を実行
+                import re
+                deep_context = ""
+                all_names = {**TICKER_NAMES}
+                from custom_stocks import load_custom_stocks
+                for cs in load_custom_stocks():
+                    all_names[cs["ticker"]] = cs["name"]
+
+                # No.番号で特定
+                found_tickers = []
+                try:
+                    number_matches = re.findall(r'(?:No\.?|番号|シグナル|#)\s*(\d+)|(\d+)\s*(?:番|号)', prompt)
+                    for match in number_matches:
+                        num = int(match[0] or match[1])
+                        if sig_table is not None and 1 <= num <= len(sig_table):
+                            row = sig_table[sig_table["No."] == num].iloc[0]
+                            found_tickers.append(row["ティッカー"])
+                except Exception:
+                    pass
+
+                # 銘柄名で特定
+                for ticker, name in all_names.items():
+                    if name in prompt or ticker in prompt or ticker.replace(".T", "") in prompt:
+                        if ticker not in found_tickers:
+                            found_tickers.append(ticker)
+
+                # 見つかった銘柄を深層分析
+                if found_tickers:
+                    from deep_analyzer import deep_analyze_stock
+                    for ticker in found_tickers[:2]:
+                        name = all_names.get(ticker, ticker)
+                        analysis = deep_analyze_stock(ticker, name)
+                        ai = analysis.get("ai_analysis", {})
+                        fins = analysis.get("financials", {}).get("basic", {})
+                        qi = analysis.get("quarterly_income", [])
+                        bs = analysis.get("financials", {}).get("balance_sheet", {})
+                        cf = analysis.get("financials", {}).get("cashflow", {})
+                        ir = analysis.get("ir_news", [])
+
+                        deep_context += f"""
+=== {name} ({ticker}) 深層分析結果 ===
+【AI総合スコア】{ai.get('total_score', 'N/A')}/10
+【ファンダメンタルズ】{ai.get('fundamental_score', 'N/A')}/10
+【成長性】{ai.get('growth_score', 'N/A')}/10
+【割安度】{ai.get('value_score', 'N/A')}/10
+【財務健全性】{ai.get('financial_health_score', 'N/A')}/10
+【IR/ニュースセンチメント】{ai.get('ir_sentiment_score', 'N/A')}/10
+【推奨】{ai.get('recommendation', 'N/A')}
+【要約】{ai.get('summary', 'N/A')}
+【ポジティブ要因】{ai.get('key_positives', [])}
+【リスク要因】{ai.get('key_risks', [])}
+【適正株価推定】{ai.get('fair_value_estimate', 'N/A')}
+
+【主要財務指標】
+PER: {fins.get('PER')} / PBR: {fins.get('PBR')} / ROE: {fins.get('ROE')} / ROA: {fins.get('ROA')}
+営業利益率: {fins.get('営業利益率')} / 純利益率: {fins.get('純利益率')}
+売上成長率: {fins.get('売上成長率')} / 利益成長率: {fins.get('利益成長率')}
+配当利回り: {fins.get('配当利回り')} / 負債/自己資本: {fins.get('負債/自己資本')}
+FCF: {fins.get('フリーCF')} / 営業CF: {fins.get('営業CF')}
+アナリスト推奨: {fins.get('アナリスト推奨')} / 目標株価: {fins.get('目標株価_平均')}
+52週高値: {fins.get('52週高値')} / 52週安値: {fins.get('52週安値')}
+
+【バランスシート】{json.dumps(bs, ensure_ascii=False, default=str) if bs else 'N/A'}
+【キャッシュフロー】{json.dumps(cf, ensure_ascii=False, default=str) if cf else 'N/A'}
+
+【最新IR・ニュース】
+{chr(10).join(f'- {n}' for n in ir[:5]) if ir else '取得なし'}
+"""
+
                 try:
                     client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+                    # 深層分析結果をユーザーメッセージに追加
+                    user_content = prompt
+                    if deep_context:
+                        user_content = f"{prompt}\n\n--- 以下は自動取得した深層分析データです ---\n{deep_context}"
+
                     messages = [{"role": m["role"], "content": m["content"]}
-                                for m in st.session_state.chat_messages[-8:]]
+                                for m in st.session_state.chat_messages[:-1][-6:]]
+                    messages.append({"role": "user", "content": user_content})
+
                     response = client.messages.create(
                         model="claude-haiku-4-5-20251001",
-                        max_tokens=1500,
+                        max_tokens=2000,
                         system=chat_system,
                         messages=messages,
                     )

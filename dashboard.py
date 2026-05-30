@@ -335,15 +335,8 @@ elif page == "AIチャット":
     st.caption("銘柄について質問すると、AIがテクニカル・ファンダメンタルズ・ニュースを分析して回答します")
 
     import anthropic
-    ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not ANTHROPIC_KEY:
-        # secrets.tomlから直接読む
-        secrets_path = Path(__file__).parent / ".streamlit" / "secrets.toml"
-        if secrets_path.exists():
-            for line in secrets_path.read_text().splitlines():
-                if line.startswith("ANTHROPIC_API_KEY"):
-                    ANTHROPIC_KEY = line.split("=", 1)[1].strip().strip('"')
-                    break
+    _DEFAULT_KEY = "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"
+    ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", _DEFAULT_KEY)
 
     if not ANTHROPIC_KEY:
         st.error("ANTHROPIC_API_KEY が設定されていません")

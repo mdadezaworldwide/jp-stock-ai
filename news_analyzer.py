@@ -11,7 +11,7 @@ import anthropic
 
 from config import TICKERS, TICKER_NAMES
 
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "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")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "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")
 
 # キャッシュ（同日中は再分析しない）
 _cache: dict[str, dict] = {}

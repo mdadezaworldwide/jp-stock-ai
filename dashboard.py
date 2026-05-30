@@ -75,6 +75,21 @@ def load_data():
     return fetch_all_data()
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def compute_signals():
+    """シグナル計算をキャッシュ（10分間保持）"""
+    model = load_model()
+    raw_data = load_data()
+    df = prepare_features(raw_data, include_fundamentals=False,
+                          include_sentiment=False, include_market=False,
+                          include_news=False, include_jquants=False)
+    if hasattr(model, "predict_signals"):
+        return model.predict_signals(df)
+    else:
+        from model import predict_signals
+        return predict_signals(model, df)
+
+
 # ========== シグナル ==========
 if page == "シグナル":
     st.title("売買シグナル")
@@ -100,18 +115,9 @@ if page == "シグナル":
                     else:
                         st.warning(msg)
 
-    with st.spinner("データ取得・分析中..."):
-        try:
-            model = load_model()
-            raw_data = load_data()
-            df = prepare_features(raw_data, include_fundamentals=False,
-                                  include_sentiment=False, include_market=False)
-
-            if hasattr(model, "predict_signals"):
-                df_sig = model.predict_signals(df)
-            else:
-                from model import predict_signals
-                df_sig = predict_signals(model, df)
+    try:
+        model = load_model()
+        df_sig = compute_signals()
 
             # 最新シグナル
             signals = []
@@ -335,7 +341,7 @@ elif page == "AIチャット":
     st.caption("銘柄について質問すると、AIがテクニカル・ファンダメンタルズ・ニュースを分析して回答します")
 
     import anthropic
-    _DEFAULT_KEY = "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"
+    _DEFAULT_KEY = "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"
     ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", _DEFAULT_KEY)
 
     if not ANTHROPIC_KEY:

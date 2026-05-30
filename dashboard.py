@@ -374,11 +374,25 @@ if page == "シグナル":
         def load_period_model(days):
             from ensemble import EnsembleModel
             from pathlib import Path
-            model_path = Path(__file__).parent / "models" / f"ensemble_{days}d.pkl"
+            model_dir = Path(__file__).parent / "models"
+            model_dir.mkdir(exist_ok=True)
+            model_path = model_dir / f"ensemble_{days}d.pkl"
             if model_path.exists():
                 return EnsembleModel.load(model_path)
-            # フォールバック: デフォルトモデル
-            return load_model()
+            # モデルがない場合は自動訓練
+            st.info(f"初回: {days}日モデルを訓練中（数分かかります）...")
+            import config
+            original = config.HOLD_DAYS
+            config.HOLD_DAYS = days
+            raw = load_data()
+            df = prepare_features(raw, include_fundamentals=False,
+                                  include_sentiment=False, include_market=False,
+                                  include_news=False, include_jquants=False)
+            model = EnsembleModel()
+            model.train(df)
+            model.save(model_path)
+            config.HOLD_DAYS = original
+            return model
 
         @st.cache_data(ttl=3600, show_spinner=False)
         def get_signal_table_period(days):

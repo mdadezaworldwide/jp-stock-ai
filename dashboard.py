@@ -15,8 +15,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 # Streamlit Secrets から環境変数にセット
 for key in ["ANTHROPIC_API_KEY", "JQUANTS_API_KEY"]:
-    if key not in os.environ and hasattr(st, "secrets") and key in st.secrets:
-        os.environ[key] = st.secrets[key]
+    if key not in os.environ:
+        try:
+            if key in st.secrets:
+                os.environ[key] = st.secrets[key]
+        except Exception:
+            pass
 
 from config import TICKERS, TICKER_NAMES, TICKER_SECTORS, HOLD_DAYS, TARGET_RETURN, INITIAL_CAPITAL
 from data_fetcher import fetch_stock_data
@@ -321,8 +325,11 @@ elif page == "AIチャット":
 
     import anthropic
     ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-    if hasattr(st, "secrets") and "ANTHROPIC_API_KEY" in st.secrets:
-        ANTHROPIC_KEY = st.secrets["ANTHROPIC_API_KEY"]
+    try:
+        if "ANTHROPIC_API_KEY" in st.secrets:
+            ANTHROPIC_KEY = st.secrets["ANTHROPIC_API_KEY"]
+    except Exception:
+        pass
 
     if not ANTHROPIC_KEY:
         st.error("ANTHROPIC_API_KEY が設定されていません")

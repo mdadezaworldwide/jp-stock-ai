@@ -12,17 +12,42 @@ CUSTOM_FILE = Path(__file__).parent / "custom_stocks.json"
 
 
 def load_custom_stocks() -> list[dict]:
-    """カスタム銘柄リストを読み込み"""
+    """カスタム銘柄リストを読み込み（セッション + ファイル）"""
+    try:
+        import streamlit as st
+        if "custom_stocks" in st.session_state:
+            return st.session_state["custom_stocks"]
+    except Exception:
+        pass
+
     if CUSTOM_FILE.exists():
-        with open(CUSTOM_FILE, encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(CUSTOM_FILE, encoding="utf-8") as f:
+                stocks = json.load(f)
+            try:
+                import streamlit as st
+                st.session_state["custom_stocks"] = stocks
+            except Exception:
+                pass
+            return stocks
+        except Exception:
+            pass
     return []
 
 
 def save_custom_stocks(stocks: list[dict]):
-    """カスタム銘柄リストを保存"""
-    with open(CUSTOM_FILE, "w", encoding="utf-8") as f:
-        json.dump(stocks, f, ensure_ascii=False, indent=2)
+    """カスタム銘柄リストを保存（セッション + ファイル）"""
+    try:
+        import streamlit as st
+        st.session_state["custom_stocks"] = stocks
+    except Exception:
+        pass
+
+    try:
+        with open(CUSTOM_FILE, "w", encoding="utf-8") as f:
+            json.dump(stocks, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 
 def add_custom_stock(ticker: str, name: str = ""):

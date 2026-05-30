@@ -336,7 +336,17 @@ def _show_ai_chat(sig_df):
 # ========== シグナル ==========
 if page == "シグナル":
     st.title("売買シグナル")
-    st.caption(f"保有日数: {HOLD_DAYS}日 / 目標リターン: {TARGET_RETURN*100:.1f}%")
+
+    # 保有期間の切り替え
+    hold_period = st.radio(
+        "保有期間",
+        ["1週間(5日)", "2週間(10日)", "1か月(20日)", "3か月(60日)"],
+        horizontal=True,
+        index=0,
+    )
+    hold_days_map = {"1週間(5日)": 5, "2週間(10日)": 10, "1か月(20日)": 20, "3か月(60日)": 60}
+    selected_hold_days = hold_days_map[hold_period]
+    st.caption(f"「{hold_period}保有して2%以上上がる確率」を表示")
 
     # カスタム銘柄の追加UI
     with st.expander("銘柄を追加"):
@@ -359,93 +369,84 @@ if page == "シグナル":
                         st.warning(msg)
 
     try:
-        sig_df = get_signal_table()
-
-        # 期間別シグナル率
-        period_label = st.radio(
-            "過去の買いシグナル率を表示",
-            ["現在のシグナル", "1週間", "1か月", "3か月"],
-            horizontal=True,
-        )
-
-        if period_label != "現在のシグナル":
-            period_map = {"1週間": 5, "1か月": 20, "3か月": 60}
-            lookback = period_map[period_label]
-
+        # 保有日数を変えてシグナル生成
+        if selected_hold_days == HOLD_DAYS:
+            sig_df = get_signal_table()
+        else:
             @st.cache_data(ttl=3600, show_spinner=False)
-            def calc_signal_history(days):
-                """過去N日間の買いシグナル率を銘柄ごとに算出"""
-                df_sig = compute_signals()
-                result = []
+            def get_signal_table_custom(days):
+                """保有日数を変えたシグナルテーブル"""
+                import config
+                original = config.HOLD_DAYS
+                config.HOLD_DAYS = days
+
+                model = load_model()
+                raw_data = load_data()
+                df = prepare_features(raw_data, include_fundamentals=False,
+                                      include_sentiment=False, include_market=False,
+                                      include_news=False, include_jquants=False)
+                if hasattr(model, "predict_signals"):
+                    df_sig = model.predict_signals(df)
+                else:
+                    from model import predict_signals
+                    df_sig = predict_signals(model, df)
+
+                config.HOLD_DAYS = original
+
+                from hold_advisor import advise_hold_period
+                signals = []
                 for ticker in df_sig["Ticker"].unique():
-                    td = df_sig[df_sig["Ticker"] == ticker].tail(days)
+                    td = df_sig[df_sig["Ticker"] == ticker]
                     if td.empty:
                         continue
-                    buy_days = (td["Signal"] == 1).sum()
-                    total_days = len(td)
-                    buy_rate = buy_days / total_days if total_days > 0 else 0
                     latest = td.iloc[-1]
-                    name = TICKER_NAMES.get(ticker, ticker)
-                    result.append({
-                        "No.": 0,
-                        "銘柄": name,
+                    rsi_val = latest.get("RSI_14", np.nan)
+                    macd_val = latest.get("MACD_hist", np.nan)
+                    if pd.notna(rsi_val):
+                        if rsi_val >= 70: rsi_label = "買われすぎ"
+                        elif rsi_val <= 30: rsi_label = "売られすぎ"
+                        elif rsi_val <= 40: rsi_label = "やや売られすぎ"
+                        elif rsi_val >= 60: rsi_label = "やや買われすぎ"
+                        else: rsi_label = "普通"
+                    else:
+                        rsi_label = "-"
+                    if pd.notna(macd_val):
+                        if macd_val > 0:
+                            macd_label = "上昇の勢い加速" if macd_val > 0.5 else "上昇の勢い鈍化"
+                        else:
+                            macd_label = "下落の勢い加速" if macd_val < -0.5 else "下落止まりつつある"
+                    else:
+                        macd_label = "-"
+                    hold_advice = advise_hold_period(td)
+                    signals.append({
+                        "銘柄": TICKER_NAMES.get(ticker, ticker),
                         "ティッカー": ticker,
                         "セクター": TICKER_SECTORS.get(ticker, "カスタム"),
                         "終値": latest["Close"],
-                        f"買いシグナル率({period_label})": buy_rate,
-                        "BUY日数": f"{buy_days}/{total_days}日",
-                        "現在の確率": latest["Signal_prob"],
-                        "RSI": latest.get("RSI_14", np.nan),
-                        "MACD": latest.get("MACD_hist", np.nan),
+                        "シグナル確率": latest["Signal_prob"],
+                        "判定": "BUY" if latest["Signal"] == 1 else "-",
+                        "RSI": rsi_val, "RSI判定": rsi_label,
+                        "MACD": macd_val, "MACD判定": macd_label,
+                        "推奨保有": hold_advice["label"], "保有理由": hold_advice["reason"],
                     })
-                hist_df = pd.DataFrame(result)
-                hist_df = hist_df.sort_values(f"買いシグナル率({period_label})", ascending=False)
-                hist_df = hist_df.reset_index(drop=True)
-                hist_df["No."] = range(1, len(hist_df) + 1)
-                return hist_df
+                result = pd.DataFrame(signals)
+                sort_order = {"BUY": 0, "強い買い": 1, "買い": 2, "やや買い": 3}
+                result["_sort"] = result["判定"].map(sort_order).fillna(9)
+                result = result.sort_values(["_sort", "シグナル確率"], ascending=[True, False]).drop(columns=["_sort"])
+                result = result.reset_index(drop=True)
+                result.insert(0, "No.", range(1, len(result) + 1))
+                return result
 
-            with st.spinner(f"過去{period_label}の分析中..."):
-                hist_df = calc_signal_history(lookback)
+            with st.spinner(f"{hold_period}のシグナル計算中..."):
+                sig_df = get_signal_table_custom(selected_hold_days)
 
-            rate_col = f"買いシグナル率({period_label})"
-            high_rate = (hist_df[rate_col] >= 0.5).sum()
-            col1, col2, col3 = st.columns(3)
-            col1.metric(f"高シグナル率(50%+)", f"{high_rate}銘柄")
-            col2.metric("分析銘柄数", f"{len(hist_df)}銘柄")
-            col3.metric("期間", period_label)
+        buy_count = sig_df["判定"].str.contains("買い|BUY", na=False).sum()
+        col1, col2, col3 = st.columns(3)
+        col1.metric("買いシグナル", f"{buy_count}銘柄")
+        col2.metric("分析銘柄数", f"{len(sig_df)}銘柄")
+        col3.metric("保有期間", hold_period)
 
-            def color_rate(row):
-                r = row[rate_col]
-                if r >= 0.7:
-                    return ["background-color: #d4edda"] * len(row)
-                elif r >= 0.5:
-                    return ["background-color: #e8f5e9"] * len(row)
-                elif r <= 0.1:
-                    return ["background-color: #f8d7da"] * len(row)
-                return [""] * len(row)
-
-            st.dataframe(
-                hist_df.style.apply(color_rate, axis=1).format({
-                    "終値": "{:,.0f}",
-                    rate_col: "{:.0%}",
-                    "現在の確率": "{:.1%}",
-                    "RSI": "{:.1f}",
-                    "MACD": "{:.2f}",
-                }),
-                use_container_width=True,
-                hide_index=True,
-            )
-        else:
-            # 現在のシグナル（従来通り）
-            buy_count = sig_df["判定"].str.contains("買い|BUY", na=False).sum()
-            col1, col2, col3 = st.columns(3)
-            col1.metric("買いシグナル", f"{buy_count}銘柄")
-            col2.metric("分析銘柄数", f"{len(sig_df)}銘柄")
-            col3.metric("閾値", "50%")
-
-            _show_signal_table(sig_df)
-
-        # AIチャット（常に表示）
+        _show_signal_table(sig_df)
         _show_ai_chat(sig_df)
 
     except Exception as e:

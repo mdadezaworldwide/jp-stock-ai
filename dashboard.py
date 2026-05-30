@@ -647,23 +647,33 @@ elif page == "マイポートフォリオ":
 **注意:** 買い増しはファンダメンタルズが健全な場合のみ推奨されます。業績悪化中の銘柄では表示されません。
 """)
 
-        # --- 売却フォーム ---
-        with st.expander("売却を記録"):
+        # --- 売却 / 削除フォーム ---
+        with st.expander("売却・削除"):
             sell_tickers = [h["ticker"] for h in holdings]
             col1, col2 = st.columns(2)
             with col1:
                 sell_ticker = st.selectbox(
-                    "売却銘柄", sell_tickers,
+                    "銘柄を選択", sell_tickers,
                     format_func=lambda t: f"{_all_portfolio_names.get(t, t)} ({t})",
                     key="sell_ticker",
                 )
             with col2:
-                sell_price = st.number_input("売値（円）", min_value=1.0, value=1000.0, step=1.0, key="sell_price")
+                sell_price = st.number_input("売値（円）※売却時のみ", min_value=0.0, value=0.0, step=1.0, key="sell_price")
 
-            if st.button("売却を記録"):
-                remove_holding(sell_ticker, sell_price)
-                st.success(f"{TICKER_NAMES.get(sell_ticker, sell_ticker)} を売却記録しました")
-                st.rerun()
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("売却を記録", type="primary"):
+                    if sell_price > 0:
+                        remove_holding(sell_ticker, sell_price)
+                        st.success(f"{_all_portfolio_names.get(sell_ticker, sell_ticker)} を売却記録しました")
+                        st.rerun()
+                    else:
+                        st.warning("売値を入力してください")
+            with col_b:
+                if st.button("記録を削除（売却せず取消）"):
+                    remove_holding(sell_ticker)
+                    st.success(f"{_all_portfolio_names.get(sell_ticker, sell_ticker)} を削除しました")
+                    st.rerun()
 
         # --- 取引履歴 ---
         if TRADE_HISTORY_FILE.exists():

@@ -1,6 +1,5 @@
 """日本株データの取得（J-Quants優先、フォールバックでyfinance）"""
 
-import yfinance as yf
 import pandas as pd
 from datetime import datetime, timedelta
 from config import TICKERS, DATA_PERIOD_YEARS
@@ -17,7 +16,8 @@ def fetch_stock_data(ticker: str, years: int = DATA_PERIOD_YEARS) -> pd.DataFram
     end = datetime.now()
     start = end - timedelta(days=years * 365)
     try:
-        df = yf.download(ticker, start=start, end=end, progress=False)
+        from safe_yf import download as _dl
+        df = _dl(ticker, start=start, end=end)
         if df.empty:
             return pd.DataFrame()
         if isinstance(df.columns, pd.MultiIndex):

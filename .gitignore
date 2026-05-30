@@ -1,0 +1,10 @@
+__pycache__/
+*.pkl
+*.pyc
+.env
+logs/
+paper_trades/
+models/
+trained_model.pkl
+*.png
+.streamlit/secrets.toml

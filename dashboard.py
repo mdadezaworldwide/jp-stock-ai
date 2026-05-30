@@ -55,6 +55,7 @@ st.set_page_config(page_title="JP Stock AI", layout="wide")
 st.sidebar.title("JP Stock AI")
 page = st.sidebar.radio("ページ", [
     "シグナル",
+    "デイトレアラート",
     "マイポートフォリオ",
     "カスタム銘柄分析",
     "バックテスト結果",
@@ -477,13 +478,13 @@ if page == "シグナル":
     # 保有期間の切り替え
     hold_period = st.radio(
         "保有期間",
-        ["1週間(5日)", "2週間(10日)", "1か月(20日)", "3か月(60日)"],
+        ["デイトレ(1日)", "1週間(5日)", "2週間(10日)", "1か月(20日)", "3か月(60日)"],
         horizontal=True,
         index=0,
     )
-    hold_days_map = {"1週間(5日)": 5, "2週間(10日)": 10, "1か月(20日)": 20, "3か月(60日)": 60}
+    hold_days_map = {"デイトレ(1日)": 1, "1週間(5日)": 5, "2週間(10日)": 10, "1か月(20日)": 20, "3か月(60日)": 60}
     selected_hold_days = hold_days_map[hold_period]
-    target_map = {5: "2%", 10: "3%", 20: "4%", 60: "6%"}
+    target_map = {1: "1%", 5: "2%", 10: "3%", 20: "4%", 60: "6%"}
     target_pct = target_map[selected_hold_days]
     st.caption(f"「{hold_period}保有して{target_pct}以上上がる確率」を表示")
 
@@ -686,6 +687,76 @@ if page == "シグナル":
         st.error(f"モデル読み込みエラー: {e}")
         st.info("先に `python main.py train` を実行してください")
 
+
+
+# ========== デイトレアラート ==========
+elif page == "デイトレアラート":
+    st.title("デイトレアラート")
+    st.caption("翌日+1%以上が期待される銘柄をAIが検出")
+
+    if st.button("今すぐスキャン", type="primary"):
+        with st.spinner("500銘柄をスキャン中..."):
+            try:
+                from alert_monitor import scan_daily_signals
+                alerts = scan_daily_signals(top_n=20)
+
+                if alerts:
+                    alert_df = pd.DataFrame(alerts)
+
+                    def color_urgency(row):
+                        u = row["緊急度"]
+                        if u == "高":
+                            return ["background-color: #d4edda"] * len(row)
+                        elif u == "中":
+                            return ["background-color: #e8f5e9"] * len(row)
+                        return [""] * len(row)
+
+                    st.subheader(f"検出: {len(alerts)}銘柄")
+                    st.dataframe(
+                        alert_df.style.apply(color_urgency, axis=1).format({
+                            "終値": "{:,.0f}",
+                            "シグナル確率": "{:.1%}",
+                            "RSI": "{:.1f}",
+                            "MACD": "{:.2f}",
+                        }),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                    st.markdown("""
+**緊急度の見方:**
+- **高（確率60%+）**: 強い買いシグナル、翌日寄付で買い推奨
+- **中（確率50%+）**: 買い候補、他の指標も確認
+- **低（確率45%+）**: 参考程度、慎重に判断
+""")
+                else:
+                    st.info("現在、強い短期シグナルは検出されませんでした")
+            except Exception as e:
+                st.error(f"スキャンエラー: {e}")
+
+    # アラート履歴
+    alert_log = Path(__file__).parent / "logs" / "daily_alerts.csv"
+    if alert_log.exists():
+        st.subheader("過去のアラート履歴")
+        try:
+            hist = pd.read_csv(alert_log)
+            st.dataframe(hist.tail(50), use_container_width=True, hide_index=True)
+        except Exception:
+            pass
+
+    st.markdown("---")
+    st.markdown("""
+### 自動監視の使い方
+ターミナルで以下を実行すると、毎日15:30以降に自動スキャン→LINE/Discord通知：
+```
+python alert_monitor.py
+```
+
+リアルタイム監視（auカブコム証券口座が必要）：
+```
+python realtime_scanner.py
+```
+""")
 
 
 # ========== マイポートフォリオ ==========

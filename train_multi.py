@@ -6,8 +6,9 @@ from features import prepare_features, get_feature_columns
 from ensemble import EnsembleModel
 from pathlib import Path
 
-# 保有期間 → 目標リターン（月利2%ベース）
+# 保有期間 → 目標リターン
 PERIODS = {
+    1: 0.01,    # デイトレ: +1%
     5: 0.02,    # 1週間: +2%
     10: 0.03,   # 2週間: +3%
     20: 0.04,   # 1か月: +4%

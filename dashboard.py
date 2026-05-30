@@ -69,6 +69,26 @@ if page == "シグナル":
     st.title("売買シグナル")
     st.caption(f"保有日数: {HOLD_DAYS}日 / 目標リターン: {TARGET_RETURN*100:.1f}%")
 
+    # カスタム銘柄の追加UI
+    with st.expander("銘柄を追加"):
+        st.markdown("東証: 銘柄コード + `.T`（例: `3776.T`） / 米国株: そのまま（例: `AAPL`）")
+        add_col1, add_col2, add_col3 = st.columns([2, 2, 1])
+        with add_col1:
+            add_ticker = st.text_input("ティッカー", placeholder="3776.T", key="sig_add_ticker")
+        with add_col2:
+            add_name = st.text_input("銘柄名（任意）", placeholder="ブロードバンドタワー", key="sig_add_name")
+        with add_col3:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("追加", type="primary", key="sig_add_btn"):
+                if add_ticker:
+                    from custom_stocks import add_custom_stock
+                    ok, msg = add_custom_stock(add_ticker.strip(), add_name.strip())
+                    if ok:
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.warning(msg)
+
     with st.spinner("データ取得・分析中..."):
         try:
             model = load_model()
@@ -136,20 +156,53 @@ if page == "シグナル":
                     "保有理由": hold_advice["reason"],
                 })
 
+            # カスタム銘柄もテクニカル分析で追加
+            from custom_stocks import load_custom_stocks, analyze_custom_stock
+            from hold_advisor import advise_hold_period as _advise
+            custom_stocks = load_custom_stocks()
+            for cs in custom_stocks:
+                ct = cs["ticker"]
+                if ct in TICKERS:
+                    continue  # 既にプライム銘柄に含まれている
+                analysis = analyze_custom_stock(ct)
+                if "error" in analysis:
+                    continue
+                signals.append({
+                    "銘柄": cs["name"],
+                    "ティッカー": ct,
+                    "セクター": "カスタム",
+                    "終値": analysis["current"],
+                    "シグナル確率": None,
+                    "判定": analysis["signal"],
+                    "RSI": analysis["rsi"],
+                    "RSI判定": analysis["rsi_label"],
+                    "MACD": analysis["macd_hist"],
+                    "MACD判定": analysis["macd_label"],
+                    "推奨保有": analysis["hold_label"],
+                    "保有理由": analysis["hold_reason"],
+                })
+
             sig_df = pd.DataFrame(signals)
 
             # 買いシグナルをハイライト
-            buy_count = (sig_df["判定"] == "BUY").sum()
+            buy_count = sig_df["判定"].str.contains("買い|BUY", na=False).sum()
             col1, col2, col3 = st.columns(3)
             col1.metric("買いシグナル", f"{buy_count}銘柄")
             col2.metric("分析銘柄数", f"{len(sig_df)}銘柄")
             col3.metric("閾値", "50%")
 
+            def highlight_signal(row):
+                v = str(row["判定"])
+                if v == "BUY" or "強い買い" in v:
+                    return ["background-color: #d4edda"] * len(row)
+                elif "買い" in v:
+                    return ["background-color: #e8f5e9"] * len(row)
+                elif "売り" in v:
+                    return ["background-color: #f8d7da"] * len(row)
+                return [""] * len(row)
+
             st.dataframe(
-                sig_df.style.apply(
-                    lambda row: ["background-color: #d4edda" if row["判定"] == "BUY" else "" for _ in row],
-                    axis=1
-                ).format({
+                sig_df.style.apply(highlight_signal, axis=1).format({
                     "終値": "{:,.0f}",
                     "シグナル確率": "{:.1%}",
                     "RSI": "{:.1f}",

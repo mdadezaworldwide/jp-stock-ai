@@ -366,6 +366,7 @@ if page == "シグナル":
                     ok, msg = add_custom_stock(add_ticker.strip(), add_name.strip())
                     if ok:
                         st.success(msg)
+                        st.cache_data.clear()
                         st.rerun()
                     else:
                         st.warning(msg)

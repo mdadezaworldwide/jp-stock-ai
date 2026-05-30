@@ -672,7 +672,11 @@ if page == "シグナル":
             result.insert(0, "No.", range(1, len(result) + 1))
             return result
 
-        sig_df = get_signal_table_period(selected_hold_days)
+        with st.spinner(f"500銘柄のデータを取得・分析中..."):
+            sig_df = get_signal_table_period(selected_hold_days)
+
+        if sig_df.empty:
+            st.warning("データが取得できませんでした。「データを最新に更新」ボタンを押してください。")
 
         buy_count = sig_df["判定"].str.contains("買い|BUY", na=False).sum()
         col1, col2, col3 = st.columns(3)
@@ -684,7 +688,9 @@ if page == "シグナル":
         _show_ai_chat(sig_df)
 
     except Exception as e:
-        st.error(f"モデル読み込みエラー: {e}")
+        import traceback
+        st.error(f"エラー: {e}")
+        st.code(traceback.format_exc())
         st.info("先に `python main.py train` を実行してください")
 
 

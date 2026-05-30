@@ -231,6 +231,11 @@ if page == "シグナル":
 
             sig_df = pd.DataFrame(signals)
 
+            # 買いシグナルを上にソート
+            sort_order = {"BUY": 0, "強い買い": 1, "買い": 2, "やや買い": 3}
+            sig_df["_sort"] = sig_df["判定"].map(sort_order).fillna(9)
+            sig_df = sig_df.sort_values(["_sort", "シグナル確率"], ascending=[True, False]).drop(columns=["_sort"])
+
             # 買いシグナルをハイライト
             buy_count = sig_df["判定"].str.contains("買い|BUY", na=False).sum()
             col1, col2, col3 = st.columns(3)

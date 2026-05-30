@@ -156,31 +156,73 @@ if page == "シグナル":
                     "保有理由": hold_advice["reason"],
                 })
 
-            # カスタム銘柄もテクニカル分析で追加
-            from custom_stocks import load_custom_stocks, analyze_custom_stock
+            # カスタム銘柄もモデルでシグナル確率を算出
+            from custom_stocks import load_custom_stocks
+            from data_fetcher import fetch_stock_data
             from hold_advisor import advise_hold_period as _advise
+            from features import add_technical_features
             custom_stocks = load_custom_stocks()
             for cs in custom_stocks:
                 ct = cs["ticker"]
                 if ct in TICKERS:
-                    continue  # 既にプライム銘柄に含まれている
-                analysis = analyze_custom_stock(ct)
-                if "error" in analysis:
                     continue
-                signals.append({
-                    "銘柄": cs["name"],
-                    "ティッカー": ct,
-                    "セクター": "カスタム",
-                    "終値": analysis["current"],
-                    "シグナル確率": None,
-                    "判定": analysis["signal"],
-                    "RSI": analysis["rsi"],
-                    "RSI判定": analysis["rsi_label"],
-                    "MACD": analysis["macd_hist"],
-                    "MACD判定": analysis["macd_label"],
-                    "推奨保有": analysis["hold_label"],
-                    "保有理由": analysis["hold_reason"],
-                })
+                try:
+                    cdf = fetch_stock_data(ct, years=1)
+                    if cdf.empty or len(cdf) < 30:
+                        continue
+                    cdf = add_technical_features(cdf)
+                    cdf = cdf.dropna()
+                    if cdf.empty:
+                        continue
+
+                    # モデルで予測
+                    feat_cols = get_feature_columns(cdf)
+                    if hasattr(model, "predict_proba"):
+                        X_custom = cdf[feat_cols].tail(1)
+                        X_custom = model._align_features(X_custom)
+                        prob = float(model.predict_proba(X_custom)[0])
+                    else:
+                        prob = np.nan
+
+                    latest = cdf.iloc[-1]
+                    rsi_val = latest.get("RSI_14", np.nan)
+                    macd_val = latest.get("MACD_hist", np.nan)
+
+                    if pd.notna(rsi_val):
+                        if rsi_val >= 70: rsi_label = "買われすぎ"
+                        elif rsi_val <= 30: rsi_label = "売られすぎ"
+                        elif rsi_val <= 40: rsi_label = "やや売られすぎ"
+                        elif rsi_val >= 60: rsi_label = "やや買われすぎ"
+                        else: rsi_label = "普通"
+                    else:
+                        rsi_label = "-"
+
+                    if pd.notna(macd_val):
+                        if macd_val > 0:
+                            macd_label = "上昇の勢い加速" if macd_val > 0.5 else "上昇の勢い鈍化"
+                        else:
+                            macd_label = "下落の勢い加速" if macd_val < -0.5 else "下落止まりつつある"
+                    else:
+                        macd_label = "-"
+
+                    hold_advice = _advise(cdf)
+
+                    signals.append({
+                        "銘柄": cs["name"],
+                        "ティッカー": ct,
+                        "セクター": "カスタム",
+                        "終値": latest["Close"],
+                        "シグナル確率": prob,
+                        "判定": "BUY" if pd.notna(prob) and prob >= 0.5 else "-",
+                        "RSI": rsi_val,
+                        "RSI判定": rsi_label,
+                        "MACD": macd_val,
+                        "MACD判定": macd_label,
+                        "推奨保有": hold_advice["label"],
+                        "保有理由": hold_advice["reason"],
+                    })
+                except Exception:
+                    continue
 
             sig_df = pd.DataFrame(signals)
 

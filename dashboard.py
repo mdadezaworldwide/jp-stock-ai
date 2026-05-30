@@ -36,14 +36,24 @@ page = st.sidebar.radio("ページ", [
 ])
 
 
-@st.cache_data(ttl=300)
+@st.cache_resource(ttl=3600)
 def load_model():
     from ensemble import EnsembleModel
     try:
         return EnsembleModel.load()
     except FileNotFoundError:
-        from model import load_model as load_lgbm
-        return load_lgbm()
+        # クラウド上ではモデルがないので自動訓練
+        st.info("初回起動: モデルを訓練中です（数分かかります）...")
+        from data_fetcher import fetch_all_data
+        from features import prepare_features
+        raw = fetch_all_data()
+        df = prepare_features(raw, include_fundamentals=False,
+                              include_sentiment=False, include_market=False,
+                              include_news=False, include_jquants=False)
+        model = EnsembleModel()
+        model.train(df)
+        model.save()
+        return model
 
 
 @st.cache_data(ttl=600)

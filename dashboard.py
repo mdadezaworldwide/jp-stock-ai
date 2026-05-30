@@ -396,23 +396,25 @@ if page == "シグナル":
 
         @st.cache_data(ttl=3600, show_spinner=False)
         def get_signal_table_period(days):
-            """保有期間別シグナルテーブル"""
-            import config
-            original = config.HOLD_DAYS
-            config.HOLD_DAYS = days
-
+            """保有期間別シグナルテーブル（期間別モデルで予測）"""
             model = load_period_model(days)
             raw_data = load_data()
-            df = prepare_features(raw_data, include_fundamentals=False,
-                                  include_sentiment=False, include_market=False,
-                                  include_news=False, include_jquants=False)
+
+            # テクニカル指標のみ生成（ターゲット変数は不要）
+            from features import add_technical_features
+            result_frames = []
+            for ticker, group in raw_data.groupby("Ticker"):
+                group = group.sort_index()
+                group = add_technical_features(group)
+                result_frames.append(group)
+            df = pd.concat(result_frames).dropna()
+
+            # モデルで予測
             if hasattr(model, "predict_signals"):
                 df_sig = model.predict_signals(df)
             else:
                 from model import predict_signals
                 df_sig = predict_signals(model, df)
-
-            config.HOLD_DAYS = original
 
             from hold_advisor import advise_hold_period
             signals = []

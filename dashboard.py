@@ -461,6 +461,58 @@ if page == "シグナル":
                     "MACD": macd_val, "MACD判定": macd_label,
                     "推奨保有": hold_advice["label"], "保有理由": hold_advice["reason"],
                 })
+
+            # カスタム銘柄
+            from custom_stocks import load_custom_stocks
+            from data_fetcher import fetch_stock_data
+            for cs in load_custom_stocks():
+                ct = cs["ticker"]
+                if ct in [s.get("ティッカー") for s in signals]:
+                    continue
+                try:
+                    cdf = fetch_stock_data(ct, years=1)
+                    if cdf.empty or len(cdf) < 30:
+                        continue
+                    cdf = add_technical_features(cdf)
+                    cdf = cdf.dropna()
+                    if cdf.empty:
+                        continue
+                    feat_cols = get_feature_columns(cdf)
+                    if hasattr(model, "_align_features"):
+                        X_c = model._align_features(cdf[feat_cols].tail(1))
+                        prob = float(model.predict_proba(X_c)[0])
+                    else:
+                        prob = np.nan
+                    latest = cdf.iloc[-1]
+                    rsi_val = latest.get("RSI_14", np.nan)
+                    macd_val = latest.get("MACD_hist", np.nan)
+                    if pd.notna(rsi_val):
+                        if rsi_val >= 70: rsi_label = "買われすぎ"
+                        elif rsi_val <= 30: rsi_label = "売られすぎ"
+                        elif rsi_val <= 40: rsi_label = "やや売られすぎ"
+                        elif rsi_val >= 60: rsi_label = "やや買われすぎ"
+                        else: rsi_label = "普通"
+                    else:
+                        rsi_label = "-"
+                    if pd.notna(macd_val):
+                        if macd_val > 0:
+                            macd_label = "上昇の勢い加速" if macd_val > 0.5 else "上昇の勢い鈍化"
+                        else:
+                            macd_label = "下落の勢い加速" if macd_val < -0.5 else "下落止まりつつある"
+                    else:
+                        macd_label = "-"
+                    hold_advice = advise_hold_period(cdf)
+                    signals.append({
+                        "銘柄": cs["name"], "ティッカー": ct, "セクター": "カスタム",
+                        "終値": latest["Close"], "シグナル確率": prob,
+                        "判定": "BUY" if pd.notna(prob) and prob >= 0.5 else "-",
+                        "RSI": rsi_val, "RSI判定": rsi_label,
+                        "MACD": macd_val, "MACD判定": macd_label,
+                        "推奨保有": hold_advice["label"], "保有理由": hold_advice["reason"],
+                    })
+                except Exception:
+                    continue
+
             result = pd.DataFrame(signals)
             sort_order = {"BUY": 0, "強い買い": 1, "買い": 2, "やや買い": 3}
             result["_sort"] = result["判定"].map(sort_order).fillna(9)

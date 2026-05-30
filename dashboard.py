@@ -107,6 +107,116 @@ def compute_signals():
         return predict_signals(model, df)
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def get_signal_table():
+    """番号付きシグナルテーブルを生成（全ページから参照可能）"""
+    df_sig = compute_signals()
+    from hold_advisor import advise_hold_period
+    from custom_stocks import load_custom_stocks
+    from data_fetcher import fetch_stock_data
+    from features import add_technical_features
+
+    signals = []
+    model = load_model()
+
+    # プライム銘柄
+    for ticker in TICKERS:
+        td = df_sig[df_sig["Ticker"] == ticker]
+        if td.empty:
+            continue
+        latest = td.iloc[-1]
+        rsi_val = latest.get("RSI_14", np.nan)
+        macd_val = latest.get("MACD_hist", np.nan)
+
+        if pd.notna(rsi_val):
+            if rsi_val >= 70: rsi_label = "買われすぎ"
+            elif rsi_val <= 30: rsi_label = "売られすぎ"
+            elif rsi_val <= 40: rsi_label = "やや売られすぎ"
+            elif rsi_val >= 60: rsi_label = "やや買われすぎ"
+            else: rsi_label = "普通"
+        else:
+            rsi_label = "-"
+
+        if pd.notna(macd_val):
+            if macd_val > 0:
+                macd_label = "上昇の勢い加速" if macd_val > 0.5 else "上昇の勢い鈍化"
+            else:
+                macd_label = "下落の勢い加速" if macd_val < -0.5 else "下落止まりつつある"
+        else:
+            macd_label = "-"
+
+        hold_advice = advise_hold_period(td)
+        signals.append({
+            "銘柄": TICKER_NAMES.get(ticker, ticker),
+            "ティッカー": ticker,
+            "セクター": TICKER_SECTORS.get(ticker, ""),
+            "終値": latest["Close"],
+            "シグナル確率": latest["Signal_prob"],
+            "判定": "BUY" if latest["Signal"] == 1 else "-",
+            "RSI": rsi_val, "RSI判定": rsi_label,
+            "MACD": macd_val, "MACD判定": macd_label,
+            "推奨保有": hold_advice["label"], "保有理由": hold_advice["reason"],
+        })
+
+    # カスタム銘柄
+    for cs in load_custom_stocks():
+        ct = cs["ticker"]
+        if ct in TICKERS:
+            continue
+        try:
+            cdf = fetch_stock_data(ct, years=1)
+            if cdf.empty or len(cdf) < 30:
+                continue
+            cdf = add_technical_features(cdf)
+            cdf = cdf.dropna()
+            if cdf.empty:
+                continue
+            feat_cols = get_feature_columns(cdf)
+            if hasattr(model, "_align_features"):
+                X_custom = cdf[feat_cols].tail(1)
+                X_custom = model._align_features(X_custom)
+                prob = float(model.predict_proba(X_custom)[0])
+            else:
+                prob = np.nan
+            latest = cdf.iloc[-1]
+            rsi_val = latest.get("RSI_14", np.nan)
+            macd_val = latest.get("MACD_hist", np.nan)
+            if pd.notna(rsi_val):
+                if rsi_val >= 70: rsi_label = "買われすぎ"
+                elif rsi_val <= 30: rsi_label = "売られすぎ"
+                elif rsi_val <= 40: rsi_label = "やや売られすぎ"
+                elif rsi_val >= 60: rsi_label = "やや買われすぎ"
+                else: rsi_label = "普通"
+            else:
+                rsi_label = "-"
+            if pd.notna(macd_val):
+                if macd_val > 0:
+                    macd_label = "上昇の勢い加速" if macd_val > 0.5 else "上昇の勢い鈍化"
+                else:
+                    macd_label = "下落の勢い加速" if macd_val < -0.5 else "下落止まりつつある"
+            else:
+                macd_label = "-"
+            hold_advice = advise_hold_period(cdf)
+            signals.append({
+                "銘柄": cs["name"], "ティッカー": ct, "セクター": "カスタム",
+                "終値": latest["Close"], "シグナル確率": prob,
+                "判定": "BUY" if pd.notna(prob) and prob >= 0.5 else "-",
+                "RSI": rsi_val, "RSI判定": rsi_label,
+                "MACD": macd_val, "MACD判定": macd_label,
+                "推奨保有": hold_advice["label"], "保有理由": hold_advice["reason"],
+            })
+        except Exception:
+            continue
+
+    sig_df = pd.DataFrame(signals)
+    sort_order = {"BUY": 0, "強い買い": 1, "買い": 2, "やや買い": 3}
+    sig_df["_sort"] = sig_df["判定"].map(sort_order).fillna(9)
+    sig_df = sig_df.sort_values(["_sort", "シグナル確率"], ascending=[True, False]).drop(columns=["_sort"])
+    sig_df = sig_df.reset_index(drop=True)
+    sig_df.insert(0, "No.", range(1, len(sig_df) + 1))
+    return sig_df
+
+
 # ========== シグナル ==========
 if page == "シグナル":
     st.title("売買シグナル")
@@ -133,141 +243,7 @@ if page == "シグナル":
                         st.warning(msg)
 
     try:
-        model = load_model()
-        df_sig = compute_signals()
-
-        # 最新シグナル
-        signals = []
-        for ticker in TICKERS:
-            td = df_sig[df_sig["Ticker"] == ticker]
-            if td.empty:
-                continue
-            latest = td.iloc[-1]
-            rsi_val = latest.get("RSI_14", np.nan)
-            macd_val = latest.get("MACD_hist", np.nan)
-
-            # RSI判定
-            if pd.notna(rsi_val):
-                if rsi_val >= 70:
-                    rsi_label = "買われすぎ"
-                elif rsi_val <= 30:
-                    rsi_label = "売られすぎ"
-                elif rsi_val <= 40:
-                    rsi_label = "やや売られすぎ"
-                elif rsi_val >= 60:
-                    rsi_label = "やや買われすぎ"
-                else:
-                    rsi_label = "普通"
-            else:
-                rsi_label = "-"
-
-            # MACD判定
-            if pd.notna(macd_val):
-                if macd_val > 0:
-                    macd_label = "上昇の勢い加速" if macd_val > 0.5 else "上昇の勢い鈍化"
-                else:
-                    macd_label = "下落の勢い加速" if macd_val < -0.5 else "下落止まりつつある"
-            else:
-                macd_label = "-"
-
-            # 保有期間アドバイス
-            from hold_advisor import advise_hold_period
-            ticker_history = df_sig[df_sig["Ticker"] == ticker]
-            hold_advice = advise_hold_period(ticker_history)
-
-            signals.append({
-                "銘柄": TICKER_NAMES.get(ticker, ticker),
-                "ティッカー": ticker,
-                "セクター": TICKER_SECTORS.get(ticker, ""),
-                "終値": latest["Close"],
-                "シグナル確率": latest["Signal_prob"],
-                "判定": "BUY" if latest["Signal"] == 1 else "-",
-                "RSI": rsi_val,
-                "RSI判定": rsi_label,
-                "MACD": macd_val,
-                "MACD判定": macd_label,
-                "推奨保有": hold_advice["label"],
-                "保有理由": hold_advice["reason"],
-            })
-
-        # カスタム銘柄もモデルでシグナル確率を算出
-        from custom_stocks import load_custom_stocks
-        from data_fetcher import fetch_stock_data
-        from hold_advisor import advise_hold_period as _advise
-        from features import add_technical_features
-        custom_stocks = load_custom_stocks()
-        for cs in custom_stocks:
-            ct = cs["ticker"]
-            if ct in TICKERS:
-                continue
-            try:
-                cdf = fetch_stock_data(ct, years=1)
-                if cdf.empty or len(cdf) < 30:
-                    continue
-                cdf = add_technical_features(cdf)
-                cdf = cdf.dropna()
-                if cdf.empty:
-                    continue
-
-                feat_cols = get_feature_columns(cdf)
-                if hasattr(model, "predict_proba"):
-                    X_custom = cdf[feat_cols].tail(1)
-                    X_custom = model._align_features(X_custom)
-                    prob = float(model.predict_proba(X_custom)[0])
-                else:
-                    prob = np.nan
-
-                latest = cdf.iloc[-1]
-                rsi_val = latest.get("RSI_14", np.nan)
-                macd_val = latest.get("MACD_hist", np.nan)
-
-                if pd.notna(rsi_val):
-                    if rsi_val >= 70: rsi_label = "買われすぎ"
-                    elif rsi_val <= 30: rsi_label = "売られすぎ"
-                    elif rsi_val <= 40: rsi_label = "やや売られすぎ"
-                    elif rsi_val >= 60: rsi_label = "やや買われすぎ"
-                    else: rsi_label = "普通"
-                else:
-                    rsi_label = "-"
-
-                if pd.notna(macd_val):
-                    if macd_val > 0:
-                        macd_label = "上昇の勢い加速" if macd_val > 0.5 else "上昇の勢い鈍化"
-                    else:
-                        macd_label = "下落の勢い加速" if macd_val < -0.5 else "下落止まりつつある"
-                else:
-                    macd_label = "-"
-
-                hold_advice = _advise(cdf)
-
-                signals.append({
-                    "銘柄": cs["name"],
-                    "ティッカー": ct,
-                    "セクター": "カスタム",
-                    "終値": latest["Close"],
-                    "シグナル確率": prob,
-                    "判定": "BUY" if pd.notna(prob) and prob >= 0.5 else "-",
-                    "RSI": rsi_val,
-                    "RSI判定": rsi_label,
-                    "MACD": macd_val,
-                    "MACD判定": macd_label,
-                    "推奨保有": hold_advice["label"],
-                    "保有理由": hold_advice["reason"],
-                })
-            except Exception:
-                continue
-
-        sig_df = pd.DataFrame(signals)
-
-        # 買いシグナルを上にソート
-        sort_order = {"BUY": 0, "強い買い": 1, "買い": 2, "やや買い": 3}
-        sig_df["_sort"] = sig_df["判定"].map(sort_order).fillna(9)
-        sig_df = sig_df.sort_values(["_sort", "シグナル確率"], ascending=[True, False]).drop(columns=["_sort"])
-        sig_df = sig_df.reset_index(drop=True)
-        sig_df.insert(0, "No.", range(1, len(sig_df) + 1))
-
-        # AIチャット用にセッションに保存
-        st.session_state["signal_table"] = sig_df
+        sig_df = get_signal_table()
 
         # 買いシグナルをハイライト
         buy_count = sig_df["判定"].str.contains("買い|BUY", na=False).sum()
@@ -394,8 +370,12 @@ elif page == "AIチャット":
 
                     # シグナルテーブルの番号で検索（例: 「3番」「No.3」「シグナル3」）
                     import re
-                    sig_table = st.session_state.get("signal_table")
+                    try:
+                        sig_table = get_signal_table()
+                    except Exception:
+                        sig_table = None
                     number_matches = re.findall(r'(?:No\.?|番号|シグナル|#)\s*(\d+)|(\d+)\s*(?:番|号)', prompt)
+                    matched_rows_context = ""
                     for match in number_matches:
                         num = int(match[0] or match[1])
                         if sig_table is not None and 1 <= num <= len(sig_table):
@@ -403,6 +383,11 @@ elif page == "AIチャット":
                             t = row["ティッカー"]
                             if t not in mentioned_tickers:
                                 mentioned_tickers.append(t)
+                            # シグナルテーブルの行データを直接含める
+                            matched_rows_context += f"\n=== シグナルNo.{num}: {row['銘柄']} ({t}) ===\n"
+                            for col in sig_table.columns:
+                                if col != "No.":
+                                    matched_rows_context += f"{col}: {row[col]}\n"
 
                     # 銘柄名・ティッカーで検索
                     prompt_upper = prompt.upper()
@@ -576,9 +561,11 @@ elif page == "AIチャット":
 - リスクも必ず言及する
 - 日本語で簡潔に回答する"""
 
+                    # シグナルテーブルの行データとstock_contextを統合
+                    all_context = matched_rows_context + stock_context
                     user_msg = prompt
-                    if stock_context:
-                        user_msg = f"以下の銘柄データを基に回答してください:\n{stock_context}\n\n質問: {prompt}"
+                    if all_context:
+                        user_msg = f"以下の銘柄データ（AIシグナルシステムの実際の分析結果）を基に回答してください:\n{all_context}\n\n質問: {prompt}"
 
                     try:
                         client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)

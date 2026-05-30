@@ -28,6 +28,7 @@ st.set_page_config(page_title="JP Stock AI", layout="wide")
 st.sidebar.title("JP Stock AI")
 page = st.sidebar.radio("ページ", [
     "シグナル",
+    "マイポートフォリオ",
     "バックテスト結果",
     "セクター分析",
     "イベント分析",
@@ -214,6 +215,128 @@ if page == "シグナル":
         except Exception as e:
             st.error(f"モデル読み込みエラー: {e}")
             st.info("先に `python main.py train` を実行してください")
+
+
+# ========== マイポートフォリオ ==========
+elif page == "マイポートフォリオ":
+    st.title("マイポートフォリオ")
+    st.caption("実際に買った銘柄を記録し、AIが売り時を判定します")
+
+    from portfolio_tracker import (
+        load_holdings, add_holding, remove_holding, check_sell_signals,
+        TRADE_HISTORY_FILE,
+    )
+
+    # --- 銘柄追加フォーム ---
+    with st.expander("買い記録を追加", expanded=False):
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            buy_ticker = st.selectbox(
+                "銘柄", TICKERS,
+                format_func=lambda t: f"{TICKER_NAMES.get(t, t)} ({t})",
+                key="buy_ticker",
+            )
+        with col2:
+            buy_price = st.number_input("買値（円）", min_value=1.0, value=1000.0, step=1.0)
+        with col3:
+            buy_shares = st.number_input("株数", min_value=100, value=100, step=100)
+        with col4:
+            buy_date = st.date_input("購入日")
+
+        if st.button("記録する", type="primary"):
+            add_holding(buy_ticker, buy_price, buy_shares, buy_date.strftime("%Y-%m-%d"))
+            st.success(f"{TICKER_NAMES.get(buy_ticker, buy_ticker)} を記録しました")
+            st.rerun()
+
+    # --- 売り判定 ---
+    holdings = load_holdings()
+
+    if holdings:
+        st.subheader("保有銘柄 — AIの売り判定")
+
+        with st.spinner("売り判定を分析中..."):
+            sell_signals = check_sell_signals()
+
+        if sell_signals:
+            sell_df = pd.DataFrame(sell_signals)
+
+            # 緊急度でソート
+            urgency_order = {"高": 0, "中": 1, "低": 2}
+            sell_df["_sort"] = sell_df["緊急度"].map(urgency_order)
+            sell_df = sell_df.sort_values("_sort").drop(columns=["_sort"])
+
+            def color_action(row):
+                if "売り（" in row["判定"]:
+                    return ["background-color: #f8d7da"] * len(row)
+                elif "売り検討" in row["判定"]:
+                    return ["background-color: #fff3cd"] * len(row)
+                else:
+                    return ["background-color: #d4edda"] * len(row)
+
+            st.dataframe(
+                sell_df.style.apply(color_action, axis=1).format({
+                    "買値": "{:,.0f}",
+                    "現在値": "{:,.0f}",
+                    "損益": "{:+.1%}",
+                    "RSI": "{:.1f}",
+                    "損切ライン": "{:,.0f}",
+                    "利確ライン": "{:,.0f}",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            # 判定の説明
+            with st.expander("売り判定の見方"):
+                st.markdown("""
+| 判定 | 色 | 意味 |
+|---|---|---|
+| **売り（損切り/利確）** | 赤 | すぐに売却すべき（緊急度: 高） |
+| **売り検討** | 黄 | 売却を検討すべき（緊急度: 中） |
+| **保有継続** | 緑 | 今は売る必要なし |
+
+**判定基準:**
+- 損切りライン（買値 - ATR x 2）を下回った → 即売り
+- 利確ライン（買値 + ATR x 3）に到達 → 即売り
+- RSI 75以上 + 利益あり → 過熱、利確を検討
+- 移動平均デッドクロス + 利益あり → トレンド転換、売り検討
+- 含み損 -10%以上 → 損切り検討
+- 90日以上保有で横ばい → 資金効率低下、乗り換え検討
+""")
+
+        # --- 売却フォーム ---
+        with st.expander("売却を記録"):
+            sell_tickers = [h["ticker"] for h in holdings]
+            col1, col2 = st.columns(2)
+            with col1:
+                sell_ticker = st.selectbox(
+                    "売却銘柄", sell_tickers,
+                    format_func=lambda t: f"{TICKER_NAMES.get(t, t)} ({t})",
+                    key="sell_ticker",
+                )
+            with col2:
+                sell_price = st.number_input("売値（円）", min_value=1.0, value=1000.0, step=1.0, key="sell_price")
+
+            if st.button("売却を記録"):
+                remove_holding(sell_ticker, sell_price)
+                st.success(f"{TICKER_NAMES.get(sell_ticker, sell_ticker)} を売却記録しました")
+                st.rerun()
+
+        # --- 取引履歴 ---
+        if TRADE_HISTORY_FILE.exists():
+            trades = pd.read_csv(TRADE_HISTORY_FILE)
+            if not trades.empty:
+                st.subheader("取引履歴")
+                st.dataframe(trades, use_container_width=True, hide_index=True)
+
+                total_pnl = trades["PnL"].sum()
+                win_rate = (trades["PnL"] > 0).mean() * 100
+                col1, col2, col3 = st.columns(3)
+                col1.metric("累計損益", f"{total_pnl:+,.0f}円")
+                col2.metric("勝率", f"{win_rate:.1f}%")
+                col3.metric("取引数", f"{len(trades)}件")
+    else:
+        st.info("まだ銘柄が登録されていません。上の「買い記録を追加」から記録してください。")
 
 
 # ========== バックテスト結果 ==========

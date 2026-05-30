@@ -220,21 +220,18 @@ def _show_signal_table(sig_df):
     """シグナルテーブルを表示"""
     def highlight_signal(row):
         v = str(row["判定"])
-        if v == "BUY" or "強い買い" in v:
+        if v == "BUY":
             return ["background-color: #d4edda"] * len(row)
-        elif "買い" in v:
-            return ["background-color: #e8f5e9"] * len(row)
-        elif "売り" in v:
-            return ["background-color: #f8d7da"] * len(row)
         return [""] * len(row)
 
+    fmt = {
+        "終値": "{:,.0f}",
+        "シグナル確率": "{:.1%}",
+        "RSI": "{:.1f}",
+    }
+
     st.dataframe(
-        sig_df.style.apply(highlight_signal, axis=1).format({
-            "終値": "{:,.0f}",
-            "シグナル確率": "{:.1%}",
-            "RSI": "{:.1f}",
-            "MACD": "{:.2f}",
-        }),
+        sig_df.style.apply(highlight_signal, axis=1).format(fmt),
         use_container_width=True,
         hide_index=True,
     )
@@ -539,12 +536,16 @@ if page == "シグナル":
 
         @st.cache_data(ttl=3600, show_spinner=False)
         def get_signal_table_period(days):
-            """保有期間別シグナルテーブル（期間別モデルで予測）"""
+            """保有期間別シグナルテーブル（整合性チェック済み）"""
+            from features import add_technical_features
+            from stock_scorer import calc_technical_score, calc_fundamental_score, score_to_label, get_hold_recommendation
+            from custom_stocks import load_custom_stocks
+            from data_fetcher import fetch_stock_data
+
             model = load_period_model(days)
             raw_data = load_data()
 
-            # テクニカル指標のみ生成（ターゲット変数は不要）
-            from features import add_technical_features
+            # テクニカル指標生成
             result_frames = []
             for ticker, group in raw_data.groupby("Ticker"):
                 group = group.sort_index()
@@ -559,16 +560,15 @@ if page == "シグナル":
                 from model import predict_signals
                 df_sig = predict_signals(model, df)
 
-            from hold_advisor import advise_hold_period
-            signals = []
-            for ticker in df_sig["Ticker"].unique():
-                td = df_sig[df_sig["Ticker"] == ticker]
-                if td.empty:
-                    continue
-                latest = td.iloc[-1]
+            # ファンダスコアキャッシュ
+            fund_cache = {}
+
+            def build_row(ticker, latest, prob, name, sector):
                 rsi_val = latest.get("RSI_14", np.nan)
                 macd_val = latest.get("MACD_hist", np.nan)
-                if pd.notna(rsi_val):
+
+                # RSI判定
+                if pd.notna(rsi_val) and rsi_val != -999:
                     if rsi_val >= 70: rsi_label = "買われすぎ"
                     elif rsi_val <= 30: rsi_label = "売られすぎ"
                     elif rsi_val <= 40: rsi_label = "やや売られすぎ"
@@ -576,32 +576,61 @@ if page == "シグナル":
                     else: rsi_label = "普通"
                 else:
                     rsi_label = "-"
-                if pd.notna(macd_val):
+
+                # MACD判定
+                if pd.notna(macd_val) and macd_val != -999:
                     if macd_val > 0:
                         macd_label = "上昇の勢い加速" if macd_val > 0.5 else "上昇の勢い鈍化"
                     else:
                         macd_label = "下落の勢い加速" if macd_val < -0.5 else "下落止まりつつある"
                 else:
                     macd_label = "-"
-                hold_advice = advise_hold_period(td)
-                signals.append({
-                    "銘柄": TICKER_NAMES.get(ticker, ticker),
+
+                # テクニカルスコア
+                tech_score = calc_technical_score(latest)
+
+                # ファンダスコア（キャッシュ）
+                if ticker not in fund_cache:
+                    try:
+                        fund_cache[ticker] = calc_fundamental_score(ticker)
+                    except Exception:
+                        fund_cache[ticker] = 0
+                fund_score = fund_cache[ticker]
+
+                # 推奨保有（選択期間に整合）
+                hold_label, hold_reason = get_hold_recommendation(latest, days)
+
+                return {
+                    "銘柄": name,
                     "ティッカー": ticker,
-                    "セクター": TICKER_SECTORS.get(ticker, "カスタム"),
+                    "セクター": sector,
                     "終値": latest["Close"],
-                    "シグナル確率": latest["Signal_prob"],
-                    "判定": "BUY" if latest["Signal"] == 1 else "-",
-                    "RSI": rsi_val, "RSI判定": rsi_label,
-                    "MACD": macd_val, "MACD判定": macd_label,
-                    "推奨保有": hold_advice["label"], "保有理由": hold_advice["reason"],
-                })
+                    "シグナル確率": prob,
+                    "判定": "BUY" if pd.notna(prob) and prob >= 0.5 else "-",
+                    "テクニカル": f"{tech_score:+d} ({score_to_label(tech_score)})",
+                    "ファンダ": f"{fund_score:+d} ({score_to_label(fund_score)})",
+                    "RSI": rsi_val,
+                    "MACD判定": macd_label,
+                    "推奨保有": hold_label,
+                    "保有理由": hold_reason,
+                }
+
+            signals = []
+            for ticker in df_sig["Ticker"].unique():
+                td = df_sig[df_sig["Ticker"] == ticker]
+                if td.empty:
+                    continue
+                latest = td.iloc[-1]
+                signals.append(build_row(
+                    ticker, latest, latest["Signal_prob"],
+                    TICKER_NAMES.get(ticker, ticker),
+                    TICKER_SECTORS.get(ticker, "その他"),
+                ))
 
             # カスタム銘柄
-            from custom_stocks import load_custom_stocks
-            from data_fetcher import fetch_stock_data
             for cs in load_custom_stocks():
                 ct = cs["ticker"]
-                if ct in [s.get("ティッカー") for s in signals]:
+                if ct in [s["ティッカー"] for s in signals]:
                     continue
                 try:
                     cdf = fetch_stock_data(ct, years=1)
@@ -617,38 +646,14 @@ if page == "シグナル":
                         prob = float(model.predict_proba(X_c)[0])
                     else:
                         prob = np.nan
-                    latest = cdf.iloc[-1]
-                    rsi_val = latest.get("RSI_14", np.nan)
-                    macd_val = latest.get("MACD_hist", np.nan)
-                    if pd.notna(rsi_val):
-                        if rsi_val >= 70: rsi_label = "買われすぎ"
-                        elif rsi_val <= 30: rsi_label = "売られすぎ"
-                        elif rsi_val <= 40: rsi_label = "やや売られすぎ"
-                        elif rsi_val >= 60: rsi_label = "やや買われすぎ"
-                        else: rsi_label = "普通"
-                    else:
-                        rsi_label = "-"
-                    if pd.notna(macd_val):
-                        if macd_val > 0:
-                            macd_label = "上昇の勢い加速" if macd_val > 0.5 else "上昇の勢い鈍化"
-                        else:
-                            macd_label = "下落の勢い加速" if macd_val < -0.5 else "下落止まりつつある"
-                    else:
-                        macd_label = "-"
-                    hold_advice = advise_hold_period(cdf)
-                    signals.append({
-                        "銘柄": cs["name"], "ティッカー": ct, "セクター": "カスタム",
-                        "終値": latest["Close"], "シグナル確率": prob,
-                        "判定": "BUY" if pd.notna(prob) and prob >= 0.5 else "-",
-                        "RSI": rsi_val, "RSI判定": rsi_label,
-                        "MACD": macd_val, "MACD判定": macd_label,
-                        "推奨保有": hold_advice["label"], "保有理由": hold_advice["reason"],
-                    })
+                    signals.append(build_row(
+                        ct, cdf.iloc[-1], prob, cs["name"], "カスタム",
+                    ))
                 except Exception:
                     continue
 
             result = pd.DataFrame(signals)
-            sort_order = {"BUY": 0, "強い買い": 1, "買い": 2, "やや買い": 3}
+            sort_order = {"BUY": 0}
             result["_sort"] = result["判定"].map(sort_order).fillna(9)
             result = result.sort_values(["_sort", "シグナル確率"], ascending=[True, False]).drop(columns=["_sort"])
             result = result.reset_index(drop=True)

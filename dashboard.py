@@ -346,7 +346,9 @@ if page == "シグナル":
     )
     hold_days_map = {"1週間(5日)": 5, "2週間(10日)": 10, "1か月(20日)": 20, "3か月(60日)": 60}
     selected_hold_days = hold_days_map[hold_period]
-    st.caption(f"「{hold_period}保有して2%以上上がる確率」を表示")
+    target_map = {5: "2%", 10: "3%", 20: "4%", 60: "6%"}
+    target_pct = target_map[selected_hold_days]
+    st.caption(f"「{hold_period}保有して{target_pct}以上上がる確率」を表示")
 
     # カスタム銘柄の追加UI
     with st.expander("銘柄を追加"):

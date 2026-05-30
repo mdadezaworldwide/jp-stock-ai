@@ -26,13 +26,27 @@ from config import TICKERS, TICKER_NAMES, TICKER_SECTORS, HOLD_DAYS, TARGET_RETU
 from data_fetcher import fetch_stock_data
 from features import prepare_features, get_feature_columns
 
-# コピー時のポップアップ等を非表示
+# 全てのポップアップ・通知を非表示
 st.markdown("""<style>
-    [data-testid="stNotification"] { display: none !important; }
-    div[data-baseweb="toast"] { display: none !important; }
-    [data-testid="stToast"] { display: none !important; }
-    .stToast { display: none !important; }
-    div[role="alert"][data-baseweb="notification"] { display: none !important; }
+    [data-testid="stNotification"],
+    [data-testid="stToast"],
+    div[data-baseweb="toast"],
+    div[data-baseweb="notification"],
+    div[role="alert"],
+    .stToast,
+    .stNotification,
+    div[class*="toast"],
+    div[class*="Toast"],
+    div[class*="notification"],
+    div[class*="Notification"],
+    div[class*="snackbar"],
+    div[class*="Snackbar"] {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+    }
 </style>""", unsafe_allow_html=True)
 
 st.set_page_config(page_title="JP Stock AI", layout="wide")

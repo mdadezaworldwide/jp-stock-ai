@@ -87,6 +87,33 @@ if page == "シグナル":
                 if td.empty:
                     continue
                 latest = td.iloc[-1]
+                rsi_val = latest.get("RSI_14", np.nan)
+                macd_val = latest.get("MACD_hist", np.nan)
+
+                # RSI判定
+                if pd.notna(rsi_val):
+                    if rsi_val >= 70:
+                        rsi_label = "買われすぎ"
+                    elif rsi_val <= 30:
+                        rsi_label = "売られすぎ"
+                    elif rsi_val <= 40:
+                        rsi_label = "やや売られすぎ"
+                    elif rsi_val >= 60:
+                        rsi_label = "やや買われすぎ"
+                    else:
+                        rsi_label = "普通"
+                else:
+                    rsi_label = "-"
+
+                # MACD判定
+                if pd.notna(macd_val):
+                    if macd_val > 0:
+                        macd_label = "上昇の勢い加速" if macd_val > 0.5 else "上昇の勢い鈍化"
+                    else:
+                        macd_label = "下落の勢い加速" if macd_val < -0.5 else "下落止まりつつある"
+                else:
+                    macd_label = "-"
+
                 signals.append({
                     "銘柄": TICKER_NAMES.get(ticker, ticker),
                     "ティッカー": ticker,
@@ -94,8 +121,10 @@ if page == "シグナル":
                     "終値": latest["Close"],
                     "シグナル確率": latest["Signal_prob"],
                     "判定": "BUY" if latest["Signal"] == 1 else "-",
-                    "RSI": latest.get("RSI_14", np.nan),
-                    "MACD": latest.get("MACD_hist", np.nan),
+                    "RSI": rsi_val,
+                    "RSI判定": rsi_label,
+                    "MACD": macd_val,
+                    "MACD判定": macd_label,
                 })
 
             sig_df = pd.DataFrame(signals)
@@ -120,6 +149,35 @@ if page == "シグナル":
                 use_container_width=True,
                 hide_index=True,
             )
+
+            # 指標の説明
+            with st.expander("RSI / MACD の見方"):
+                col_r, col_m = st.columns(2)
+                with col_r:
+                    st.markdown("#### RSI（買われすぎ / 売られすぎ）")
+                    st.markdown("""
+| RSI | 意味 |
+|---|---|
+| **70以上** | 買われすぎ → そろそろ下がるかも |
+| **30以下** | 売られすぎ → そろそろ上がるかも |
+| 40〜60 | 普通 |
+""")
+                with col_m:
+                    st.markdown("#### MACD（トレンドの勢い）")
+                    st.markdown("""
+| MACD | 意味 |
+|---|---|
+| **プラスで増加中** | 上昇の勢いが加速 |
+| プラスで減少中 | 上昇の勢いが鈍化 |
+| **マイナスで減少中** | 下落の勢いが加速 |
+| マイナスで増加中 | 下落が止まりつつある |
+""")
+                st.markdown("""
+**シグナルとの組み合わせ:**
+- BUY + RSI 30〜50 + MACD上昇中 → かなり有望（まだ安い＋勢いあり）
+- BUY + RSI 70超え → 過熱気味、慎重に
+- BUY + MACD大きくマイナス → まだ下落中、エントリーは待ちもあり
+""")
 
         except Exception as e:
             st.error(f"モデル読み込みエラー: {e}")

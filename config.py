@@ -266,4 +266,4 @@ JQUANTS_EMAIL = os.environ.get("JQUANTS_EMAIL", "")
 JQUANTS_PASSWORD = os.environ.get("JQUANTS_PASSWORD", "")
 
 # === Optuna ===
-OPTUNA_N_TRIALS = 50
+OPTUNA_N_TRIALS = 1500

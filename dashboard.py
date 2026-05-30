@@ -23,8 +23,6 @@ for key in ["ANTHROPIC_API_KEY", "JQUANTS_API_KEY"]:
             pass
 
 from config import TICKERS, TICKER_NAMES, TICKER_SECTORS, HOLD_DAYS, TARGET_RETURN, INITIAL_CAPITAL
-from data_fetcher import fetch_stock_data
-from features import prepare_features, get_feature_columns
 
 # 全てのポップアップ・通知を非表示
 st.markdown("""<style>
@@ -171,6 +169,7 @@ def get_signal_table():
             cdf = cdf.dropna()
             if cdf.empty:
                 continue
+            from features import get_feature_columns
             feat_cols = get_feature_columns(cdf)
             if hasattr(model, "_align_features"):
                 X_custom = cdf[feat_cols].tail(1)

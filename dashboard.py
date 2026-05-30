@@ -589,13 +589,24 @@ if page == "シグナル":
                 # テクニカルスコア
                 tech_score = calc_technical_score(latest)
 
-                # ファンダスコア（キャッシュ）
-                if ticker not in fund_cache:
-                    try:
-                        fund_cache[ticker] = calc_fundamental_score(ticker)
-                    except Exception:
-                        fund_cache[ticker] = 0
-                fund_score = fund_cache[ticker]
+                # ファンダスコア（データから算出、API呼び出しなし）
+                fund_score = 0
+                per = latest.get("PER")
+                roe = latest.get("ROE")
+                rev_g = latest.get("Revenue_growth")
+                if pd.notna(per) and per != -999:
+                    if per < 10: fund_score += 2
+                    elif per < 15: fund_score += 1
+                    elif per > 40: fund_score -= 2
+                if pd.notna(roe) and roe != -999:
+                    if roe > 0.15: fund_score += 2
+                    elif roe > 0.08: fund_score += 1
+                    elif roe < 0: fund_score -= 2
+                if pd.notna(rev_g) and rev_g != -999:
+                    if rev_g > 0.15: fund_score += 2
+                    elif rev_g > 0.05: fund_score += 1
+                    elif rev_g < -0.05: fund_score -= 1
+                fund_score = max(-10, min(10, fund_score))
 
                 # 推奨保有（選択期間に整合）
                 hold_label, hold_reason = get_hold_recommendation(latest, days)

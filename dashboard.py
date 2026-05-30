@@ -263,6 +263,11 @@ if page == "シグナル":
         sort_order = {"BUY": 0, "強い買い": 1, "買い": 2, "やや買い": 3}
         sig_df["_sort"] = sig_df["判定"].map(sort_order).fillna(9)
         sig_df = sig_df.sort_values(["_sort", "シグナル確率"], ascending=[True, False]).drop(columns=["_sort"])
+        sig_df = sig_df.reset_index(drop=True)
+        sig_df.insert(0, "No.", range(1, len(sig_df) + 1))
+
+        # AIチャット用にセッションに保存
+        st.session_state["signal_table"] = sig_df
 
         # 買いシグナルをハイライト
         buy_count = sig_df["判定"].str.contains("買い|BUY", na=False).sum()
@@ -387,23 +392,35 @@ elif page == "AIチャット":
                     for cs in load_custom_stocks():
                         all_names[cs["ticker"]] = cs["name"]
 
+                    # シグナルテーブルの番号で検索（例: 「3番」「No.3」「シグナル3」）
+                    import re
+                    sig_table = st.session_state.get("signal_table")
+                    number_matches = re.findall(r'(?:No\.?|番号|シグナル|#)\s*(\d+)|(\d+)\s*(?:番|号)', prompt)
+                    for match in number_matches:
+                        num = int(match[0] or match[1])
+                        if sig_table is not None and 1 <= num <= len(sig_table):
+                            row = sig_table[sig_table["No."] == num].iloc[0]
+                            t = row["ティッカー"]
+                            if t not in mentioned_tickers:
+                                mentioned_tickers.append(t)
+
+                    # 銘柄名・ティッカーで検索
                     prompt_upper = prompt.upper()
                     for ticker, name in all_names.items():
                         code = ticker.replace(".T", "")
                         if (name in prompt or ticker in prompt
                             or code in prompt
                             or name.upper() in prompt_upper):
-                            mentioned_tickers.append(ticker)
+                            if ticker not in mentioned_tickers:
+                                mentioned_tickers.append(ticker)
 
                     # 銘柄コード直接入力にも対応 (例: "7794")
-                    import re
                     codes_in_prompt = re.findall(r'\b(\d{4})\b', prompt)
                     for code in codes_in_prompt:
                         t = f"{code}.T"
                         if t not in mentioned_tickers and (t in all_names or t in TICKERS):
                             mentioned_tickers.append(t)
                         elif t not in mentioned_tickers:
-                            # カスタム銘柄チェック
                             for cs in load_custom_stocks():
                                 if cs["ticker"] == t or cs["ticker"].startswith(code):
                                     if cs["ticker"] not in mentioned_tickers:

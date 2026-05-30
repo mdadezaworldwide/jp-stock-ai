@@ -28,6 +28,7 @@ st.set_page_config(page_title="JP Stock AI", layout="wide")
 st.sidebar.title("JP Stock AI")
 page = st.sidebar.radio("ページ", [
     "シグナル",
+    "AIチャット",
     "マイポートフォリオ",
     "カスタム銘柄分析",
     "バックテスト結果",
@@ -311,6 +312,148 @@ if page == "シグナル":
         except Exception as e:
             st.error(f"モデル読み込みエラー: {e}")
             st.info("先に `python main.py train` を実行してください")
+
+
+# ========== AIチャット ==========
+elif page == "AIチャット":
+    st.title("AI銘柄アナリスト")
+    st.caption("銘柄について質問すると、AIがテクニカル・ファンダメンタルズ・ニュースを分析して回答します")
+
+    import anthropic
+    ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+    if hasattr(st, "secrets") and "ANTHROPIC_API_KEY" in st.secrets:
+        ANTHROPIC_KEY = st.secrets["ANTHROPIC_API_KEY"]
+
+    if not ANTHROPIC_KEY:
+        st.error("ANTHROPIC_API_KEY が設定されていません")
+    else:
+        # チャット履歴
+        if "chat_messages" not in st.session_state:
+            st.session_state.chat_messages = []
+
+        # 過去メッセージ表示
+        for msg in st.session_state.chat_messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        # 入力
+        if prompt := st.chat_input("例: トヨタのシグナル確率が低い理由は？ / ソニーは今買い時？"):
+            st.session_state.chat_messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+
+            with st.chat_message("assistant"):
+                with st.spinner("分析中..."):
+                    # 質問から銘柄を特定
+                    mentioned_tickers = []
+                    all_names = {**TICKER_NAMES}
+                    from custom_stocks import load_custom_stocks
+                    for cs in load_custom_stocks():
+                        all_names[cs["ticker"]] = cs["name"]
+
+                    for ticker, name in all_names.items():
+                        if name in prompt or ticker in prompt or ticker.replace(".T", "") in prompt:
+                            mentioned_tickers.append(ticker)
+
+                    # 銘柄データを収集
+                    stock_context = ""
+                    for ticker in mentioned_tickers[:3]:
+                        name = all_names.get(ticker, ticker)
+                        try:
+                            import yfinance as yf
+                            stock = yf.Ticker(ticker)
+                            hist = stock.history(period="60d")
+                            info = stock.info or {}
+
+                            if not hist.empty:
+                                import ta as ta_lib
+                                close = hist["Close"]
+                                current = float(close.iloc[-1])
+                                rsi = float(ta_lib.momentum.rsi(close, window=14).iloc[-1]) if len(hist) >= 14 else None
+                                macd_obj = ta_lib.trend.MACD(close)
+                                macd_h = float(macd_obj.macd_diff().iloc[-1]) if len(hist) >= 26 else None
+                                sma5 = float(close.rolling(5).mean().iloc[-1])
+                                sma20 = float(close.rolling(20).mean().iloc[-1]) if len(hist) >= 20 else None
+                                sma60 = float(close.rolling(60).mean().iloc[-1]) if len(hist) >= 60 else None
+                                ret_5d = float(close.iloc[-1] / close.iloc[-6] - 1) if len(hist) >= 6 else None
+                                ret_20d = float(close.iloc[-1] / close.iloc[-21] - 1) if len(hist) >= 21 else None
+                                vol = float(close.pct_change().tail(20).std() * (252**0.5)) if len(hist) >= 20 else None
+
+                                stock_context += f"""
+=== {name} ({ticker}) ===
+現在値: {current:,.0f}円
+RSI(14): {f'{rsi:.1f}' if rsi else 'N/A'}
+MACD: {f'{macd_h:.2f}' if macd_h else 'N/A'}
+SMA5: {sma5:,.0f} / SMA20: {f'{sma20:,.0f}' if sma20 else 'N/A'} / SMA60: {f'{sma60:,.0f}' if sma60 else 'N/A'}
+5日リターン: {f'{ret_5d:+.1%}' if ret_5d else 'N/A'}
+20日リターン: {f'{ret_20d:+.1%}' if ret_20d else 'N/A'}
+年率ボラティリティ: {f'{vol:.1%}' if vol else 'N/A'}
+PER: {info.get('trailingPE', 'N/A')} / PBR: {info.get('priceToBook', 'N/A')}
+ROE: {info.get('returnOnEquity', 'N/A')} / 配当利回り: {info.get('dividendYield', 'N/A')}
+売上成長率: {info.get('revenueGrowth', 'N/A')} / 利益成長率: {info.get('earningsGrowth', 'N/A')}
+アナリスト推奨: {info.get('recommendationKey', 'N/A')} / 目標株価: {info.get('targetMeanPrice', 'N/A')}
+"""
+                        except Exception:
+                            pass
+
+                    # モデルのシグナル確率があれば追加
+                    try:
+                        model = load_model()
+                        raw_data = load_data()
+                        df = prepare_features(raw_data, include_fundamentals=False,
+                                              include_sentiment=False, include_market=False,
+                                              include_news=False, include_jquants=False)
+                        if hasattr(model, "predict_signals"):
+                            df_sig = model.predict_signals(df)
+                        else:
+                            from model import predict_signals
+                            df_sig = predict_signals(model, df)
+
+                        for ticker in mentioned_tickers[:3]:
+                            td = df_sig[df_sig["Ticker"] == ticker]
+                            if not td.empty:
+                                prob = float(td.iloc[-1]["Signal_prob"])
+                                stock_context += f"\nAIシグナル確率({all_names.get(ticker, ticker)}): {prob:.1%}\n"
+                    except Exception:
+                        pass
+
+                    # Claude APIで回答生成
+                    system_prompt = """あなたは日本株の専門アナリストAIです。
+ユーザーの質問に対して、提供されたデータを基に分析・回答してください。
+
+回答ルール:
+- 具体的な数値を使って根拠を示す
+- テクニカル指標（RSI, MACD, 移動平均）とファンダメンタルズ（PER, PBR, ROE）の両面から分析
+- 「買い」「売り」「保有」の判断を明確に述べる
+- リスクも必ず言及する
+- 簡潔に、要点をまとめて回答する"""
+
+                    user_msg = prompt
+                    if stock_context:
+                        user_msg = f"以下の銘柄データを基に回答してください:\n{stock_context}\n\n質問: {prompt}"
+
+                    try:
+                        client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+                        response = client.messages.create(
+                            model="claude-haiku-4-5-20251001",
+                            max_tokens=1000,
+                            system=system_prompt,
+                            messages=[
+                                *[{"role": m["role"], "content": m["content"]}
+                                  for m in st.session_state.chat_messages[-6:]],
+                            ],
+                        )
+                        reply = response.content[0].text
+                    except Exception as e:
+                        reply = f"エラーが発生しました: {e}"
+
+                    st.markdown(reply)
+                    st.session_state.chat_messages.append({"role": "assistant", "content": reply})
+
+        # クリアボタン
+        if st.sidebar.button("チャット履歴をクリア"):
+            st.session_state.chat_messages = []
+            st.rerun()
 
 
 # ========== マイポートフォリオ ==========

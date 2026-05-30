@@ -16,14 +16,16 @@ def fetch_stock_data(ticker: str, years: int = DATA_PERIOD_YEARS) -> pd.DataFram
 
     end = datetime.now()
     start = end - timedelta(days=years * 365)
-    df = yf.download(ticker, start=start, end=end, progress=False)
-    if df.empty:
-        print(f"[WARN] {ticker} のデータ取得に失敗")
+    try:
+        df = yf.download(ticker, start=start, end=end, progress=False)
+        if df.empty:
+            return pd.DataFrame()
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        df["Ticker"] = ticker
+        return df
+    except Exception:
         return pd.DataFrame()
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    df["Ticker"] = ticker
-    return df
 
 
 def fetch_all_data(tickers: list[str] = TICKERS) -> pd.DataFrame:

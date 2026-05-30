@@ -2,7 +2,7 @@
 
 import pandas as pd
 import numpy as np
-import yfinance as yf
+from safe_yf import download as _yf_download, get_info as _yf_info, get_ticker as _yf_ticker
 from datetime import datetime, timedelta
 
 # 東証セクター別ETF
@@ -35,7 +35,7 @@ def fetch_sector_data(days: int = 120) -> pd.DataFrame:
 
     for ticker, name in SECTOR_ETFS.items():
         try:
-            df = yf.download(ticker, start=start, end=end, progress=False)
+            df = _yf_download(ticker, start=start, end=end, progress=False)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             if not df.empty:

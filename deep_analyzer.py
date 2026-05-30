@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 import numpy as np
-import yfinance as yf
+from safe_yf import download as _yf_download, get_info as _yf_info, get_ticker as _yf_ticker
 
 ANTHROPIC_API_KEY = os.environ.get(
     "ANTHROPIC_API_KEY",
@@ -93,7 +93,9 @@ def fetch_ir_news(ticker: str, name: str) -> list[str]:
 
 def get_detailed_financials(ticker: str) -> dict:
     """詳細な財務データを取得"""
-    stock = yf.Ticker(ticker)
+    stock = _yf_ticker(ticker)
+    if stock is None:
+        return {"basic": {}}
     data = {}
 
     # 基本情報
@@ -207,7 +209,7 @@ def deep_analyze_stock(ticker: str, name: str) -> dict:
 
     # 3. 株価データ
     try:
-        hist = yf.download(ticker, period="6mo", progress=False)
+        hist = _yf_download(ticker, period="6mo", progress=False)
         if isinstance(hist.columns, pd.MultiIndex):
             hist.columns = hist.columns.get_level_values(0)
         price_info = {

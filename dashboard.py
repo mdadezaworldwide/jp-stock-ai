@@ -1250,9 +1250,8 @@ elif page == "銘柄詳細":
                 st.plotly_chart(fig, use_container_width=True)
 
                 # 基本情報
-                import yfinance as yf
-                stock = yf.Ticker(ticker)
-                info = stock.info or {}
+                from safe_yf import get_info as _get_info
+                info = _get_info(ticker)
                 col1, col2, col3, col4 = st.columns(4)
                 col1.metric("PER", f"{info.get('trailingPE', 'N/A')}")
                 col2.metric("PBR", f"{info.get('priceToBook', 'N/A')}")

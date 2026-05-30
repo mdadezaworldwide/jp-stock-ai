@@ -2,7 +2,7 @@
 
 import pandas as pd
 import numpy as np
-import yfinance as yf
+from safe_yf import download as _yf_download, get_info as _yf_info, get_ticker as _yf_ticker
 import ta
 from datetime import datetime, timedelta
 
@@ -18,7 +18,7 @@ def fetch_market_data(days: int = 120) -> pd.DataFrame:
     for symbol, name in MARKET_INDICES.items():
         print(f"  市場データ取得: {name}")
         try:
-            df = yf.download(symbol, start=start, end=end, progress=False)
+            df = _yf_download(symbol, start=start, end=end, progress=False)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             if not df.empty:

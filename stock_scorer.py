@@ -2,7 +2,7 @@
 
 import pandas as pd
 import numpy as np
-import yfinance as yf
+from safe_yf import get_info
 
 
 def calc_technical_score(row) -> int:
@@ -57,9 +57,8 @@ def calc_technical_score(row) -> int:
 
 def calc_fundamental_score(ticker: str) -> int:
     """ファンダメンタルズから-10〜+10のスコアを算出"""
-    try:
-        info = yf.Ticker(ticker).info or {}
-    except Exception:
+    info = get_info(ticker)
+    if not info:
         return 0
 
     score = 0

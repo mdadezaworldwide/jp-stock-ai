@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 import numpy as np
-import yfinance as yf
+from safe_yf import download as _yf_download, get_info as _yf_info, get_ticker as _yf_ticker
 
 from config import TICKER_NAMES, ATR_STOP_LOSS_MULTIPLIER, ATR_TAKE_PROFIT_MULTIPLIER
 
@@ -112,7 +112,7 @@ def check_sell_signals() -> list[dict]:
 
         # 現在の株価を取得
         try:
-            stock = yf.Ticker(ticker)
+            stock = _yf_ticker(ticker)
             hist = stock.history(period="60d")
             if hist.empty:
                 continue

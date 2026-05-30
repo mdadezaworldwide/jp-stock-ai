@@ -2,7 +2,7 @@
 
 import pandas as pd
 import numpy as np
-import yfinance as yf
+from safe_yf import download as _yf_download, get_info as _yf_info, get_ticker as _yf_ticker
 from datetime import datetime, timedelta
 
 from config import TICKERS, TICKER_NAMES
@@ -10,7 +10,7 @@ from config import TICKERS, TICKER_NAMES
 
 def get_earnings_dates(ticker: str, limit: int = 8) -> pd.DataFrame:
     """決算発表日を取得"""
-    stock = yf.Ticker(ticker)
+    stock = _yf_ticker(ticker)
     try:
         cal = stock.get_earnings_dates(limit=limit)
         if cal is not None and not cal.empty:
@@ -22,7 +22,7 @@ def get_earnings_dates(ticker: str, limit: int = 8) -> pd.DataFrame:
 
 def analyze_earnings_pattern(ticker: str) -> dict:
     """決算前後の株価パターンを分析"""
-    stock = yf.Ticker(ticker)
+    stock = _yf_ticker(ticker)
     name = TICKER_NAMES.get(ticker, ticker)
 
     # 過去の決算日
@@ -37,7 +37,7 @@ def analyze_earnings_pattern(ticker: str) -> dict:
     # 株価データ
     end = datetime.now()
     start = end - timedelta(days=365 * 3)
-    hist = yf.download(ticker, start=start, end=end, progress=False)
+    hist = _yf_download(ticker, start=start, end=end, progress=False)
     if isinstance(hist.columns, pd.MultiIndex):
         hist.columns = hist.columns.get_level_values(0)
     if hist.empty:

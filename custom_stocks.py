@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 import numpy as np
-import yfinance as yf
+from safe_yf import download as _yf_download, get_info as _yf_info, get_ticker as _yf_ticker
 import ta
 
 CUSTOM_FILE = Path(__file__).parent / "custom_stocks.json"
@@ -60,7 +60,7 @@ def add_custom_stock(ticker: str, name: str = ""):
 
     # 銘柄が存在するか確認
     try:
-        stock = yf.Ticker(ticker)
+        stock = _yf_ticker(ticker)
         info = stock.info or {}
         if not name:
             name = info.get("shortName", info.get("longName", ticker))
@@ -85,7 +85,7 @@ def remove_custom_stock(ticker: str):
 def analyze_custom_stock(ticker: str) -> dict:
     """カスタム銘柄を分析（モデル不要、テクニカル指標ベース）"""
     try:
-        hist = yf.download(ticker, period="1y", progress=False)
+        hist = _yf_download(ticker, period="1y", progress=False)
         if isinstance(hist.columns, pd.MultiIndex):
             hist.columns = hist.columns.get_level_values(0)
         if hist.empty or len(hist) < 20:
@@ -203,7 +203,7 @@ def analyze_custom_stock(ticker: str) -> dict:
 
     # ファンダメンタルズ
     try:
-        stock = yf.Ticker(ticker)
+        stock = _yf_ticker(ticker)
         info = stock.info or {}
         fundamentals = {
             "PER": info.get("trailingPE"),

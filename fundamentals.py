@@ -2,13 +2,15 @@
 
 import pandas as pd
 import numpy as np
-import yfinance as yf
+from safe_yf import get_ticker as _get_ticker
 from config import TICKERS
 
 
 def fetch_fundamentals(ticker: str) -> dict:
     """1銘柄の財務指標を取得"""
-    stock = yf.Ticker(ticker)
+    stock = _get_ticker(ticker)
+    if stock is None:
+        return {}
     info = stock.info or {}
 
     fundamentals = {
@@ -57,7 +59,9 @@ def fetch_fundamentals(ticker: str) -> dict:
 
 def fetch_financial_statements(ticker: str) -> dict:
     """損益計算書・BSから追加指標を算出"""
-    stock = yf.Ticker(ticker)
+    stock = _get_ticker(ticker)
+    if stock is None:
+        return {}
     features = {}
 
     # 損益計算書

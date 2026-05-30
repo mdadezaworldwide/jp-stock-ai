@@ -550,11 +550,20 @@ elif page == "マイポートフォリオ":
 
     # --- 銘柄追加フォーム ---
     with st.expander("買い記録を追加", expanded=False):
+        # プライム銘柄 + カスタム銘柄を統合
+        from custom_stocks import load_custom_stocks as _load_cs
+        _all_portfolio_tickers = list(TICKERS)
+        _all_portfolio_names = dict(TICKER_NAMES)
+        for _cs in _load_cs():
+            if _cs["ticker"] not in _all_portfolio_tickers:
+                _all_portfolio_tickers.append(_cs["ticker"])
+                _all_portfolio_names[_cs["ticker"]] = _cs["name"]
+
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             buy_ticker = st.selectbox(
-                "銘柄", TICKERS,
-                format_func=lambda t: f"{TICKER_NAMES.get(t, t)} ({t})",
+                "銘柄", _all_portfolio_tickers,
+                format_func=lambda t: f"{_all_portfolio_names.get(t, t)} ({t})",
                 key="buy_ticker",
             )
         with col2:
@@ -645,7 +654,7 @@ elif page == "マイポートフォリオ":
             with col1:
                 sell_ticker = st.selectbox(
                     "売却銘柄", sell_tickers,
-                    format_func=lambda t: f"{TICKER_NAMES.get(t, t)} ({t})",
+                    format_func=lambda t: f"{_all_portfolio_names.get(t, t)} ({t})",
                     key="sell_ticker",
                 )
             with col2:

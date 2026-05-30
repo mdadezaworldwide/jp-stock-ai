@@ -97,10 +97,16 @@ def check_sell_signals() -> list[dict]:
     if not holdings:
         return []
 
+    # カスタム銘柄名も含める
+    from custom_stocks import load_custom_stocks
+    all_names = dict(TICKER_NAMES)
+    for cs in load_custom_stocks():
+        all_names[cs["ticker"]] = cs["name"]
+
     results = []
     for h in holdings:
         ticker = h["ticker"]
-        name = TICKER_NAMES.get(ticker, ticker)
+        name = all_names.get(ticker, ticker)
         buy_price = h["buy_price"]
         buy_date = h["buy_date"]
 

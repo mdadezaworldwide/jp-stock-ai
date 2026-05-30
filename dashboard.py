@@ -387,9 +387,27 @@ elif page == "AIチャット":
                     for cs in load_custom_stocks():
                         all_names[cs["ticker"]] = cs["name"]
 
+                    prompt_upper = prompt.upper()
                     for ticker, name in all_names.items():
-                        if name in prompt or ticker in prompt or ticker.replace(".T", "") in prompt:
+                        code = ticker.replace(".T", "")
+                        if (name in prompt or ticker in prompt
+                            or code in prompt
+                            or name.upper() in prompt_upper):
                             mentioned_tickers.append(ticker)
+
+                    # 銘柄コード直接入力にも対応 (例: "7794")
+                    import re
+                    codes_in_prompt = re.findall(r'\b(\d{4})\b', prompt)
+                    for code in codes_in_prompt:
+                        t = f"{code}.T"
+                        if t not in mentioned_tickers and (t in all_names or t in TICKERS):
+                            mentioned_tickers.append(t)
+                        elif t not in mentioned_tickers:
+                            # カスタム銘柄チェック
+                            for cs in load_custom_stocks():
+                                if cs["ticker"] == t or cs["ticker"].startswith(code):
+                                    if cs["ticker"] not in mentioned_tickers:
+                                        mentioned_tickers.append(cs["ticker"])
 
                     # シグナル分析のキャッシュデータから全指標を取得
                     stock_context = ""
@@ -400,7 +418,6 @@ elif page == "AIチャット":
 
                     for ticker in mentioned_tickers[:3]:
                         name = all_names.get(ticker, ticker)
-                        # モデルの分析結果から全指標を取得
                         td = df_sig[df_sig["Ticker"] == ticker] if not df_sig.empty else pd.DataFrame()
 
                         if not td.empty:
@@ -466,25 +483,61 @@ elif page == "AIチャット":
                                 if val is not None and pd.notna(val) and val != -999:
                                     stock_context += f"{label}: {val}\n"
                         else:
-                            # カスタム銘柄でdf_sigにない場合、yfinanceから取得
+                            # カスタム銘柄: テクニカル分析を実行して全指標を渡す
                             try:
-                                import yfinance as yf
-                                stock = yf.Ticker(ticker)
-                                hist = stock.history(period="60d")
-                                info = stock.info or {}
-                                if not hist.empty:
-                                    import ta as ta_lib
-                                    close = hist["Close"]
-                                    current = float(close.iloc[-1])
-                                    rsi = float(ta_lib.momentum.rsi(close, window=14).iloc[-1]) if len(hist) >= 14 else None
-                                    macd_obj = ta_lib.trend.MACD(close)
-                                    macd_h = float(macd_obj.macd_diff().iloc[-1]) if len(hist) >= 26 else None
-                                    stock_context += f"\n=== {name} ({ticker}) ===\n"
-                                    stock_context += f"現在値: {current:,.0f}円\n"
-                                    stock_context += f"RSI(14): {rsi:.1f}\n" if rsi else ""
-                                    stock_context += f"MACD: {macd_h:.2f}\n" if macd_h else ""
-                                    stock_context += f"PER: {info.get('trailingPE', 'N/A')} / PBR: {info.get('priceToBook', 'N/A')}\n"
-                                    stock_context += f"ROE: {info.get('returnOnEquity', 'N/A')}\n"
+                                from custom_stocks import analyze_custom_stock
+                                from data_fetcher import fetch_stock_data
+                                from features import add_technical_features
+
+                                cdf = fetch_stock_data(ticker, years=1)
+                                if not cdf.empty:
+                                    cdf = add_technical_features(cdf)
+                                    cdf = cdf.dropna()
+                                    if not cdf.empty:
+                                        latest = cdf.iloc[-1]
+                                        stock_context += f"\n=== {name} ({ticker}) ===\n"
+                                        stock_context += f"終値: {latest['Close']:,.0f}円\n"
+
+                                        # モデルでシグナル確率を算出
+                                        try:
+                                            model = load_model()
+                                            feat_cols = get_feature_columns(cdf)
+                                            X_custom = cdf[feat_cols].tail(1)
+                                            X_custom = model._align_features(X_custom)
+                                            prob = float(model.predict_proba(X_custom)[0])
+                                            stock_context += f"AIシグナル確率: {prob:.1%}\n"
+                                            stock_context += f"AI判定: {'BUY' if prob >= 0.5 else '見送り'}\n"
+                                        except Exception:
+                                            pass
+
+                                        # 全テクニカル指標
+                                        for col, label in [
+                                            ("RSI_14", "RSI(14)"), ("RSI_9", "RSI(9)"),
+                                            ("MACD", "MACD"), ("MACD_signal", "MACDシグナル"), ("MACD_hist", "MACDヒストグラム"),
+                                            ("ADX", "ADX"), ("SMA_5", "SMA5"), ("SMA_20", "SMA20"), ("SMA_60", "SMA60"),
+                                            ("SMA_5_deviation", "SMA5乖離率"), ("SMA_20_deviation", "SMA20乖離率"),
+                                            ("BB_width", "BB幅"), ("BB_position", "BB位置"), ("ATR_14", "ATR"),
+                                            ("Stoch_K", "ストキャス%K"), ("Stoch_D", "ストキャス%D"),
+                                            ("ROC_1", "1日変化率"), ("ROC_5", "5日変化率"), ("ROC_20", "20日変化率"),
+                                            ("Volume_ratio", "出来高比率"), ("OBV", "OBV"),
+                                        ]:
+                                            val = latest.get(col)
+                                            if val is not None and pd.notna(val):
+                                                stock_context += f"{label}: {val:.4f}\n"
+
+                                        # ファンダメンタルズ
+                                        import yfinance as yf
+                                        info = yf.Ticker(ticker).info or {}
+                                        for key, label in [
+                                            ("trailingPE", "PER"), ("priceToBook", "PBR"),
+                                            ("returnOnEquity", "ROE"), ("returnOnAssets", "ROA"),
+                                            ("dividendYield", "配当利回り"), ("profitMargins", "純利益率"),
+                                            ("revenueGrowth", "売上成長率"), ("earningsGrowth", "利益成長率"),
+                                            ("debtToEquity", "負債/自己資本"),
+                                        ]:
+                                            val = info.get(key)
+                                            if val is not None:
+                                                stock_context += f"{label}: {val}\n"
                             except Exception:
                                 pass
 

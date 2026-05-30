@@ -66,7 +66,7 @@ page = st.sidebar.radio("ページ", [
 ])
 
 
-@st.cache_resource(ttl=3600)
+@st.cache_resource(ttl=86400)
 def load_model():
     from ensemble import EnsembleModel
     try:
@@ -86,7 +86,7 @@ def load_model():
         return model
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=86400)
 def load_data():
     from data_fetcher import fetch_all_data
     return fetch_all_data()
@@ -511,7 +511,7 @@ if page == "シグナル":
 
     try:
         # 保有期間別モデルを読み込んでシグナル生成
-        @st.cache_resource(ttl=3600)
+        @st.cache_resource(ttl=86400)
         def load_period_model(days):
             from ensemble import EnsembleModel
             from pathlib import Path
@@ -535,7 +535,7 @@ if page == "シグナル":
             config.HOLD_DAYS = original
             return model
 
-        @st.cache_data(ttl=3600, show_spinner=False)
+        @st.cache_data(ttl=86400, show_spinner=False)
         def get_signal_table_period(days):
             """保有期間別シグナルテーブル（整合性チェック済み）"""
             from features import add_technical_features

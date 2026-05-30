@@ -369,76 +369,82 @@ if page == "シグナル":
                         st.warning(msg)
 
     try:
-        # 保有日数を変えてシグナル生成
-        if selected_hold_days == HOLD_DAYS:
-            sig_df = get_signal_table()
-        else:
-            @st.cache_data(ttl=3600, show_spinner=False)
-            def get_signal_table_custom(days):
-                """保有日数を変えたシグナルテーブル"""
-                import config
-                original = config.HOLD_DAYS
-                config.HOLD_DAYS = days
+        # 保有期間別モデルを読み込んでシグナル生成
+        @st.cache_resource(ttl=3600)
+        def load_period_model(days):
+            from ensemble import EnsembleModel
+            from pathlib import Path
+            model_path = Path(__file__).parent / "models" / f"ensemble_{days}d.pkl"
+            if model_path.exists():
+                return EnsembleModel.load(model_path)
+            # フォールバック: デフォルトモデル
+            return load_model()
 
-                model = load_model()
-                raw_data = load_data()
-                df = prepare_features(raw_data, include_fundamentals=False,
-                                      include_sentiment=False, include_market=False,
-                                      include_news=False, include_jquants=False)
-                if hasattr(model, "predict_signals"):
-                    df_sig = model.predict_signals(df)
+        @st.cache_data(ttl=3600, show_spinner=False)
+        def get_signal_table_period(days):
+            """保有期間別シグナルテーブル"""
+            import config
+            original = config.HOLD_DAYS
+            config.HOLD_DAYS = days
+
+            model = load_period_model(days)
+            raw_data = load_data()
+            df = prepare_features(raw_data, include_fundamentals=False,
+                                  include_sentiment=False, include_market=False,
+                                  include_news=False, include_jquants=False)
+            if hasattr(model, "predict_signals"):
+                df_sig = model.predict_signals(df)
+            else:
+                from model import predict_signals
+                df_sig = predict_signals(model, df)
+
+            config.HOLD_DAYS = original
+
+            from hold_advisor import advise_hold_period
+            signals = []
+            for ticker in df_sig["Ticker"].unique():
+                td = df_sig[df_sig["Ticker"] == ticker]
+                if td.empty:
+                    continue
+                latest = td.iloc[-1]
+                rsi_val = latest.get("RSI_14", np.nan)
+                macd_val = latest.get("MACD_hist", np.nan)
+                if pd.notna(rsi_val):
+                    if rsi_val >= 70: rsi_label = "買われすぎ"
+                    elif rsi_val <= 30: rsi_label = "売られすぎ"
+                    elif rsi_val <= 40: rsi_label = "やや売られすぎ"
+                    elif rsi_val >= 60: rsi_label = "やや買われすぎ"
+                    else: rsi_label = "普通"
                 else:
-                    from model import predict_signals
-                    df_sig = predict_signals(model, df)
-
-                config.HOLD_DAYS = original
-
-                from hold_advisor import advise_hold_period
-                signals = []
-                for ticker in df_sig["Ticker"].unique():
-                    td = df_sig[df_sig["Ticker"] == ticker]
-                    if td.empty:
-                        continue
-                    latest = td.iloc[-1]
-                    rsi_val = latest.get("RSI_14", np.nan)
-                    macd_val = latest.get("MACD_hist", np.nan)
-                    if pd.notna(rsi_val):
-                        if rsi_val >= 70: rsi_label = "買われすぎ"
-                        elif rsi_val <= 30: rsi_label = "売られすぎ"
-                        elif rsi_val <= 40: rsi_label = "やや売られすぎ"
-                        elif rsi_val >= 60: rsi_label = "やや買われすぎ"
-                        else: rsi_label = "普通"
+                    rsi_label = "-"
+                if pd.notna(macd_val):
+                    if macd_val > 0:
+                        macd_label = "上昇の勢い加速" if macd_val > 0.5 else "上昇の勢い鈍化"
                     else:
-                        rsi_label = "-"
-                    if pd.notna(macd_val):
-                        if macd_val > 0:
-                            macd_label = "上昇の勢い加速" if macd_val > 0.5 else "上昇の勢い鈍化"
-                        else:
-                            macd_label = "下落の勢い加速" if macd_val < -0.5 else "下落止まりつつある"
-                    else:
-                        macd_label = "-"
-                    hold_advice = advise_hold_period(td)
-                    signals.append({
-                        "銘柄": TICKER_NAMES.get(ticker, ticker),
-                        "ティッカー": ticker,
-                        "セクター": TICKER_SECTORS.get(ticker, "カスタム"),
-                        "終値": latest["Close"],
-                        "シグナル確率": latest["Signal_prob"],
-                        "判定": "BUY" if latest["Signal"] == 1 else "-",
-                        "RSI": rsi_val, "RSI判定": rsi_label,
-                        "MACD": macd_val, "MACD判定": macd_label,
-                        "推奨保有": hold_advice["label"], "保有理由": hold_advice["reason"],
-                    })
-                result = pd.DataFrame(signals)
-                sort_order = {"BUY": 0, "強い買い": 1, "買い": 2, "やや買い": 3}
-                result["_sort"] = result["判定"].map(sort_order).fillna(9)
-                result = result.sort_values(["_sort", "シグナル確率"], ascending=[True, False]).drop(columns=["_sort"])
-                result = result.reset_index(drop=True)
-                result.insert(0, "No.", range(1, len(result) + 1))
-                return result
+                        macd_label = "下落の勢い加速" if macd_val < -0.5 else "下落止まりつつある"
+                else:
+                    macd_label = "-"
+                hold_advice = advise_hold_period(td)
+                signals.append({
+                    "銘柄": TICKER_NAMES.get(ticker, ticker),
+                    "ティッカー": ticker,
+                    "セクター": TICKER_SECTORS.get(ticker, "カスタム"),
+                    "終値": latest["Close"],
+                    "シグナル確率": latest["Signal_prob"],
+                    "判定": "BUY" if latest["Signal"] == 1 else "-",
+                    "RSI": rsi_val, "RSI判定": rsi_label,
+                    "MACD": macd_val, "MACD判定": macd_label,
+                    "推奨保有": hold_advice["label"], "保有理由": hold_advice["reason"],
+                })
+            result = pd.DataFrame(signals)
+            sort_order = {"BUY": 0, "強い買い": 1, "買い": 2, "やや買い": 3}
+            result["_sort"] = result["判定"].map(sort_order).fillna(9)
+            result = result.sort_values(["_sort", "シグナル確率"], ascending=[True, False]).drop(columns=["_sort"])
+            result = result.reset_index(drop=True)
+            result.insert(0, "No.", range(1, len(result) + 1))
+            return result
 
-            with st.spinner(f"{hold_period}のシグナル計算中..."):
-                sig_df = get_signal_table_custom(selected_hold_days)
+        sig_df = get_signal_table_period(selected_hold_days)
 
         buy_count = sig_df["判定"].str.contains("買い|BUY", na=False).sum()
         col1, col2, col3 = st.columns(3)

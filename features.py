@@ -105,11 +105,14 @@ def add_market_features(df: pd.DataFrame, market_df: pd.DataFrame) -> pd.DataFra
 
 
 def create_target(df: pd.DataFrame) -> pd.DataFrame:
-    """目標変数を作成"""
+    """目標変数を作成（config.HOLD_DAYSをリアルタイムで参照）"""
+    import config
+    hold = config.HOLD_DAYS
+    target_ret = config.TARGET_RETURN
     df["Future_return"] = df.groupby("Ticker")["Close"].transform(
-        lambda x: x.shift(-HOLD_DAYS) / x - 1
+        lambda x: x.shift(-hold) / x - 1
     )
-    df["Target"] = (df["Future_return"] >= TARGET_RETURN).astype(int)
+    df["Target"] = (df["Future_return"] >= target_ret).astype(int)
     return df
 
 

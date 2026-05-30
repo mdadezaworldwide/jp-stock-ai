@@ -136,64 +136,136 @@ def check_sell_signals() -> list[dict]:
             rsi = 50.0
 
         # 移動平均
-        sma5 = float(hist["Close"].rolling(5).mean().iloc[-1]) if len(hist) >= 5 else current
-        sma20 = float(hist["Close"].rolling(20).mean().iloc[-1]) if len(hist) >= 20 else current
+        close = hist["Close"]
+        sma5 = float(close.rolling(5).mean().iloc[-1]) if len(hist) >= 5 else current
+        sma20 = float(close.rolling(20).mean().iloc[-1]) if len(hist) >= 20 else current
+        sma60 = float(close.rolling(60).mean().iloc[-1]) if len(hist) >= 60 else current
+
+        # 出来高分析
+        vol_sma20 = float(hist["Volume"].rolling(20).mean().iloc[-1]) if len(hist) >= 20 else 0
+        vol_current = float(hist["Volume"].iloc[-1])
+        vol_ratio = vol_current / vol_sma20 if vol_sma20 > 0 else 1.0
+
+        # SMA20からの乖離率
+        sma20_dev = (current - sma20) / sma20 if sma20 > 0 else 0
+
+        # ADX（トレンド強度）
+        if len(hist) >= 14:
+            adx = float(ta_lib.trend.adx(hist["High"], hist["Low"], hist["Close"]).iloc[-1])
+        else:
+            adx = 20.0
+
+        # ファンダメンタルズチェック
+        try:
+            info = stock.info or {}
+            roe = info.get("returnOnEquity")
+            earnings_growth = info.get("earningsGrowth")
+            revenue_growth = info.get("revenueGrowth")
+            fundamentals_healthy = (
+                (roe is not None and roe > 0.05) or
+                (earnings_growth is not None and earnings_growth > 0) or
+                (revenue_growth is not None and revenue_growth > 0)
+            )
+        except Exception:
+            fundamentals_healthy = False
+            roe = None
+            earnings_growth = None
 
         # 損切り・利確ライン
         stop_loss = buy_price - atr * ATR_STOP_LOSS_MULTIPLIER
         take_profit = buy_price + atr * ATR_TAKE_PROFIT_MULTIPLIER
 
-        # === 売り判定ロジック ===
+        # === 判定ロジック ===
         action = "保有継続"
         reason = ""
         urgency = "低"  # 低/中/高
 
-        # 1. 損切りライン到達
-        if current <= stop_loss:
-            action = "売り（損切り）"
-            reason = f"損切りライン({stop_loss:,.0f}円)を下回りました"
-            urgency = "高"
+        # --- 買い増し判定（売り判定より先にチェック） ---
+        is_nanpin = False
 
-        # 2. 利確ライン到達
-        elif current >= take_profit:
-            action = "売り（利確）"
-            reason = f"利確ライン({take_profit:,.0f}円)に到達しました"
-            urgency = "高"
-
-        # 3. RSI過熱
-        elif rsi >= 75 and pnl_pct > 0.03:
-            action = "売り検討"
-            reason = f"RSI {rsi:.0f}で過熱、利益{pnl_pct:+.1%}あり"
+        # 買い増し条件1: RSI売られすぎ + ファンダ健全 + 下落幅が限定的
+        if rsi <= 30 and fundamentals_healthy and pnl_pct > -0.15:
+            is_nanpin = True
+            reason_parts = [f"RSI {rsi:.0f}(売られすぎ)"]
+            if roe: reason_parts.append(f"ROE {roe:.1%}")
+            action = "買い増しチャンス"
+            reason = " / ".join(reason_parts) + " / ファンダ健全で反発期待"
             urgency = "中"
 
-        # 4. デッドクロス（短期MA < 長期MA に転換）
-        elif sma5 < sma20 and pnl_pct > 0:
-            action = "売り検討"
-            reason = "移動平均がデッドクロス、トレンド転換の兆候"
+        # 買い増し条件2: SMA20から大きく乖離 + 出来高減少（売り枯れ）+ ファンダ健全
+        elif sma20_dev < -0.08 and vol_ratio < 0.8 and fundamentals_healthy and pnl_pct > -0.20:
+            is_nanpin = True
+            action = "買い増しチャンス"
+            reason = f"SMA20から{sma20_dev:.1%}乖離 / 出来高減少(売り枯れ) / ファンダ健全"
             urgency = "中"
 
-        # 5. 大きな含み損（-10%以上）
-        elif pnl_pct <= -0.10:
-            action = "売り検討（損切り）"
-            reason = f"含み損{pnl_pct:.1%}が拡大中"
-            urgency = "中"
-
-        # 6. 長期保有で停滞
-        elif days_held > 90 and abs(pnl_pct) < 0.02:
-            action = "売り検討"
-            reason = f"{days_held}日保有で横ばい（資金効率低下）"
+        # 買い増し条件3: 市場全体の下げに連動 + 個別ファンダ良好 + RSIが低め
+        elif pnl_pct < -0.05 and rsi < 40 and fundamentals_healthy and adx < 25:
+            is_nanpin = True
+            action = "買い増し検討"
+            reason = f"RSI {rsi:.0f} / トレンド弱(ADX {adx:.0f}) / ファンダ健全で一時的な下げの可能性"
             urgency = "低"
 
-        # 7. 利益が出ている + トレンド継続中 → 保有
-        elif pnl_pct > 0.05 and sma5 > sma20:
-            action = "保有継続"
-            reason = f"利益{pnl_pct:+.1%}、上昇トレンド継続中"
-            urgency = "低"
+        # --- 売り判定 ---
+        if not is_nanpin:
+            # 1. 損切りライン到達
+            if current <= stop_loss:
+                action = "売り（損切り）"
+                reason = f"損切りライン({stop_loss:,.0f}円)を下回りました"
+                urgency = "高"
 
-        else:
-            action = "保有継続"
-            reason = "特に売りシグナルなし"
-            urgency = "低"
+            # 2. 利確ライン到達
+            elif current >= take_profit:
+                action = "売り（利確）"
+                reason = f"利確ライン({take_profit:,.0f}円)に到達しました"
+                urgency = "高"
+
+            # 3. RSI過熱
+            elif rsi >= 75 and pnl_pct > 0.03:
+                action = "売り検討"
+                reason = f"RSI {rsi:.0f}で過熱、利益{pnl_pct:+.1%}あり"
+                urgency = "中"
+
+            # 4. デッドクロス + 強い下降トレンド
+            elif sma5 < sma20 and adx > 30 and pnl_pct < -0.05:
+                action = "売り検討（損切り）"
+                reason = f"デッドクロス + 強い下降トレンド(ADX {adx:.0f})"
+                urgency = "高"
+
+            # 5. デッドクロス（利益あり）
+            elif sma5 < sma20 and pnl_pct > 0:
+                action = "売り検討"
+                reason = "移動平均がデッドクロス、トレンド転換の兆候"
+                urgency = "中"
+
+            # 6. 大きな含み損 + ファンダ悪化
+            elif pnl_pct <= -0.10 and not fundamentals_healthy:
+                action = "売り検討（損切り）"
+                reason = f"含み損{pnl_pct:.1%} + 業績悪化"
+                urgency = "高"
+
+            # 7. 大きな含み損だがファンダ健全
+            elif pnl_pct <= -0.10 and fundamentals_healthy:
+                action = "保有継続（様子見）"
+                reason = f"含み損{pnl_pct:.1%}だがファンダ健全、安易な損切りは避ける"
+                urgency = "中"
+
+            # 8. 長期保有で停滞
+            elif days_held > 90 and abs(pnl_pct) < 0.02:
+                action = "売り検討"
+                reason = f"{days_held}日保有で横ばい（資金効率低下）"
+                urgency = "低"
+
+            # 9. 利益 + 上昇トレンド継続
+            elif pnl_pct > 0.05 and sma5 > sma20:
+                action = "保有継続"
+                reason = f"利益{pnl_pct:+.1%}、上昇トレンド継続中"
+                urgency = "低"
+
+            else:
+                action = "保有継続"
+                reason = "特に売りシグナルなし"
+                urgency = "低"
 
         results.append({
             "銘柄": name,

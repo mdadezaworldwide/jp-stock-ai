@@ -85,7 +85,7 @@ def load_model():
         return model
 
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=3600)
 def load_data():
     from data_fetcher import fetch_all_data
     return fetch_all_data()
@@ -441,9 +441,14 @@ elif page == "マイポートフォリオ":
             sell_df = sell_df.sort_values("_sort").drop(columns=["_sort"])
 
             def color_action(row):
-                if "売り（" in row["判定"]:
+                v = row["判定"]
+                if "買い増しチャンス" in v:
+                    return ["background-color: #cce5ff"] * len(row)
+                elif "買い増し検討" in v:
+                    return ["background-color: #d6eaf8"] * len(row)
+                elif "売り（" in v:
                     return ["background-color: #f8d7da"] * len(row)
-                elif "売り検討" in row["判定"]:
+                elif "売り検討" in v:
                     return ["background-color: #fff3cd"] * len(row)
                 else:
                     return ["background-color: #d4edda"] * len(row)
@@ -462,21 +467,29 @@ elif page == "マイポートフォリオ":
             )
 
             # 判定の説明
-            with st.expander("売り判定の見方"):
+            with st.expander("判定の見方"):
                 st.markdown("""
 | 判定 | 色 | 意味 |
 |---|---|---|
-| **売り（損切り/利確）** | 赤 | すぐに売却すべき（緊急度: 高） |
-| **売り検討** | 黄 | 売却を検討すべき（緊急度: 中） |
+| **買い増しチャンス** | 青 | ナンピン買い推奨（反発期待） |
+| **買い増し検討** | 薄青 | 買い増しを検討してよい |
 | **保有継続** | 緑 | 今は売る必要なし |
+| **売り検討** | 黄 | 売却を検討すべき |
+| **売り（損切り/利確）** | 赤 | すぐに売却すべき |
 
-**判定基準:**
+**買い増し条件:**
+- RSI 30以下（売られすぎ）+ 業績健全（ROE/利益成長OK）→ 反発期待
+- SMA20から8%以上乖離 + 出来高減少（売り枯れ）→ 平均回帰期待
+- 含み損あり + RSI低め + トレンド弱い + ファンダ健全 → 一時的な下げ
+
+**売り条件:**
 - 損切りライン（買値 - ATR x 2）を下回った → 即売り
 - 利確ライン（買値 + ATR x 3）に到達 → 即売り
 - RSI 75以上 + 利益あり → 過熱、利確を検討
-- 移動平均デッドクロス + 利益あり → トレンド転換、売り検討
-- 含み損 -10%以上 → 損切り検討
-- 90日以上保有で横ばい → 資金効率低下、乗り換え検討
+- デッドクロス + 強い下降トレンド → 損切り検討
+- 含み損 -10%以上 + 業績悪化 → 損切り検討
+
+**注意:** 買い増しはファンダメンタルズが健全な場合のみ推奨されます。業績悪化中の銘柄では表示されません。
 """)
 
         # --- 売却フォーム ---

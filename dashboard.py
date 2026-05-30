@@ -337,11 +337,14 @@ elif page == "AIチャット":
 
     import anthropic
     ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-    try:
-        if "ANTHROPIC_API_KEY" in st.secrets:
-            ANTHROPIC_KEY = st.secrets["ANTHROPIC_API_KEY"]
-    except Exception:
-        pass
+    if not ANTHROPIC_KEY:
+        # secrets.tomlから直接読む
+        secrets_path = Path(__file__).parent / ".streamlit" / "secrets.toml"
+        if secrets_path.exists():
+            for line in secrets_path.read_text().splitlines():
+                if line.startswith("ANTHROPIC_API_KEY"):
+                    ANTHROPIC_KEY = line.split("=", 1)[1].strip().strip('"')
+                    break
 
     if not ANTHROPIC_KEY:
         st.error("ANTHROPIC_API_KEY が設定されていません")

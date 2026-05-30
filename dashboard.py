@@ -114,6 +114,11 @@ if page == "シグナル":
                 else:
                     macd_label = "-"
 
+                # 保有期間アドバイス
+                from hold_advisor import advise_hold_period
+                ticker_history = df_sig[df_sig["Ticker"] == ticker]
+                hold_advice = advise_hold_period(ticker_history)
+
                 signals.append({
                     "銘柄": TICKER_NAMES.get(ticker, ticker),
                     "ティッカー": ticker,
@@ -125,6 +130,8 @@ if page == "シグナル":
                     "RSI判定": rsi_label,
                     "MACD": macd_val,
                     "MACD判定": macd_label,
+                    "推奨保有": hold_advice["label"],
+                    "保有理由": hold_advice["reason"],
                 })
 
             sig_df = pd.DataFrame(signals)
@@ -183,6 +190,17 @@ if page == "シグナル":
 | プラスで減少中 | 上昇の勢いが鈍化 |
 | **マイナスで減少中** | 下落の勢いが加速 |
 | マイナスで増加中 | 下落が止まりつつある |
+""")
+                st.markdown("---")
+                st.markdown("#### 推奨保有期間")
+                st.markdown("""
+銘柄ごとのトレンド強度・ボラティリティ・移動平均の並びから、最適な保有期間をAIが判定します。
+
+| 推奨 | 条件 |
+|---|---|
+| **短期（5〜7日）** | ボラティリティが高い / RSIが極端 / 短期リバウンド狙い |
+| **中期（15〜20日）** | トレンド形成中 / 移動平均が上向き |
+| **長期（30〜60日）** | パーフェクトオーダー成立 / 非常に強い上昇トレンド |
 """)
                 st.markdown("---")
                 st.markdown("""

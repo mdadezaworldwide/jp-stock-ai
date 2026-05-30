@@ -29,6 +29,7 @@ st.sidebar.title("JP Stock AI")
 page = st.sidebar.radio("ページ", [
     "シグナル",
     "マイポートフォリオ",
+    "カスタム銘柄分析",
     "バックテスト結果",
     "セクター分析",
     "イベント分析",
@@ -337,6 +338,146 @@ elif page == "マイポートフォリオ":
                 col3.metric("取引数", f"{len(trades)}件")
     else:
         st.info("まだ銘柄が登録されていません。上の「買い記録を追加」から記録してください。")
+
+
+# ========== カスタム銘柄分析 ==========
+elif page == "カスタム銘柄分析":
+    st.title("カスタム銘柄分析")
+    st.caption("プライム株以外の銘柄も自由に追加して分析できます")
+
+    from custom_stocks import load_custom_stocks, add_custom_stock, remove_custom_stock, analyze_custom_stock
+
+    # --- 銘柄追加フォーム ---
+    with st.expander("銘柄を追加", expanded=True):
+        st.markdown("東証の銘柄コードに `.T` を付けて入力してください（例: `3776.T`）。米国株はそのまま（例: `AAPL`）。")
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            new_ticker = st.text_input("ティッカー", placeholder="例: 3776.T")
+        with col2:
+            new_name = st.text_input("銘柄名（任意）", placeholder="例: ブロードバンドタワー")
+
+        if st.button("追加", type="primary"):
+            if new_ticker:
+                ok, msg = add_custom_stock(new_ticker.strip(), new_name.strip())
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.warning(msg)
+
+    # --- 登録済み銘柄一覧 & 分析 ---
+    custom_stocks = load_custom_stocks()
+
+    if custom_stocks:
+        st.subheader(f"登録銘柄 ({len(custom_stocks)}件)")
+
+        # 削除ボタン
+        cols = st.columns(min(len(custom_stocks), 6))
+        for i, s in enumerate(custom_stocks):
+            with cols[i % 6]:
+                if st.button(f"x {s['name']}", key=f"del_{s['ticker']}"):
+                    remove_custom_stock(s["ticker"])
+                    st.rerun()
+
+        st.markdown("---")
+
+        # 全銘柄分析
+        with st.spinner("分析中..."):
+            results = []
+            for s in custom_stocks:
+                analysis = analyze_custom_stock(s["ticker"])
+                if "error" not in analysis:
+                    results.append({
+                        "銘柄": s["name"],
+                        "ティッカー": s["ticker"],
+                        "現在値": analysis["current"],
+                        "テクニカル判定": analysis["signal"],
+                        "RSI": analysis["rsi"],
+                        "RSI判定": analysis["rsi_label"],
+                        "MACD": analysis["macd_hist"],
+                        "MACD判定": analysis["macd_label"],
+                        "トレンド": analysis["trend"],
+                        "推奨保有": analysis["hold_label"],
+                        "保有理由": analysis["hold_reason"],
+                        "5日リターン": analysis["ret_5d"],
+                        "20日リターン": analysis["ret_20d"],
+                    })
+
+            if results:
+                res_df = pd.DataFrame(results)
+
+                def color_signal(row):
+                    s = row["テクニカル判定"]
+                    if "強い買い" in s:
+                        return ["background-color: #d4edda"] * len(row)
+                    elif "買い" in s:
+                        return ["background-color: #e8f5e9"] * len(row)
+                    elif "売り" in s:
+                        return ["background-color: #f8d7da"] * len(row)
+                    return [""] * len(row)
+
+                st.dataframe(
+                    res_df.style.apply(color_signal, axis=1).format({
+                        "現在値": "{:,.0f}",
+                        "RSI": "{:.1f}",
+                        "MACD": "{:.2f}",
+                        "5日リターン": "{:+.1%}",
+                        "20日リターン": "{:+.1%}",
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+        # 個別チャート
+        st.markdown("---")
+        selected = st.selectbox(
+            "詳細チャートを見る",
+            [s["ticker"] for s in custom_stocks],
+            format_func=lambda t: next((s["name"] for s in custom_stocks if s["ticker"] == t), t),
+        )
+
+        if selected:
+            analysis = analyze_custom_stock(selected)
+            if "error" not in analysis:
+                name = next((s["name"] for s in custom_stocks if s["ticker"] == selected), selected)
+
+                # チャート
+                hist = analysis["hist"]
+                fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                                    row_heights=[0.7, 0.3], vertical_spacing=0.05)
+                fig.add_trace(go.Candlestick(
+                    x=hist.index, open=hist["Open"], high=hist["High"],
+                    low=hist["Low"], close=hist["Close"], name="株価",
+                ), row=1, col=1)
+
+                for period, color in [(5, "orange"), (20, "blue"), (60, "red")]:
+                    sma = hist["Close"].rolling(period).mean()
+                    fig.add_trace(go.Scatter(
+                        x=hist.index, y=sma, name=f"SMA{period}",
+                        line=dict(width=1, color=color),
+                    ), row=1, col=1)
+
+                fig.add_trace(go.Bar(
+                    x=hist.index, y=hist["Volume"], name="出来高",
+                    marker_color="lightblue",
+                ), row=2, col=1)
+
+                fig.update_layout(
+                    title=f"{name} ({selected})",
+                    xaxis_rangeslider_visible=False, height=500,
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                # ファンダメンタルズ
+                fund = analysis.get("fundamentals", {})
+                if fund:
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("PER", f"{fund.get('PER', 'N/A')}")
+                    col2.metric("PBR", f"{fund.get('PBR', 'N/A')}")
+                    col3.metric("ROE", f"{fund.get('ROE', 'N/A')}")
+                    col4.metric("配当利回り", f"{fund.get('配当利回り', 'N/A')}")
+    else:
+        st.info("まだ銘柄が登録されていません。上のフォームからティッカーを入力して追加してください。")
 
 
 # ========== バックテスト結果 ==========

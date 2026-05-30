@@ -337,6 +337,12 @@ def _show_ai_chat(sig_df):
 if page == "シグナル":
     st.title("売買シグナル")
 
+    # データ更新ボタン
+    if st.button("データを最新に更新"):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        st.rerun()
+
     # 保有期間の切り替え
     hold_period = st.radio(
         "保有期間",

@@ -55,7 +55,6 @@ st.set_page_config(page_title="JP Stock AI", layout="wide")
 st.sidebar.title("JP Stock AI")
 page = st.sidebar.radio("ページ", [
     "シグナル",
-    "AIチャット",
     "マイポートフォリオ",
     "カスタム銘柄分析",
     "バックテスト結果",
@@ -327,268 +326,70 @@ if page == "シグナル":
 - BUY + MACD大きくマイナス → まだ下落中、エントリーは待ちもあり
 """)
 
-    except Exception as e:
-        st.error(f"モデル読み込みエラー: {e}")
-        st.info("先に `python main.py train` を実行してください")
+        # === AIチャット（シグナルページ内） ===
+        st.markdown("---")
+        st.subheader("AIに質問する")
+        st.caption("「2番はなんで買いシグナル？」のように番号で質問できます")
 
+        import anthropic
+        _DEFAULT_KEY = "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"
+        ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", _DEFAULT_KEY)
 
-# ========== AIチャット ==========
-elif page == "AIチャット":
-    st.title("AI銘柄アナリスト")
-    st.caption("銘柄について質問すると、AIがテクニカル・ファンダメンタルズ・ニュースを分析して回答します")
+        if ANTHROPIC_KEY:
+            table_text = sig_df.to_string(index=False)
+            chat_system = f"""あなたは日本株の専門アナリストAIです。
+以下はAIシグナルシステムの現在の売買シグナル一覧です。ユーザーが「2番」「No.3」などと言ったら、この表のNo.列を参照してください。
 
-    import anthropic
-    _DEFAULT_KEY = "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"
-    ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", _DEFAULT_KEY)
-
-    if not ANTHROPIC_KEY:
-        st.error("ANTHROPIC_API_KEY が設定されていません")
-    else:
-        # チャット履歴
-        if "chat_messages" not in st.session_state:
-            st.session_state.chat_messages = []
-
-        # 過去メッセージ表示
-        for msg in st.session_state.chat_messages:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-
-        # 入力
-        if prompt := st.chat_input("例: トヨタのシグナル確率が低い理由は？ / ソニーは今買い時？"):
-            st.session_state.chat_messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
-                st.markdown(prompt)
-
-            with st.chat_message("assistant"):
-                with st.spinner("分析中..."):
-                    # 質問から銘柄を特定
-                    mentioned_tickers = []
-                    all_names = {**TICKER_NAMES}
-                    from custom_stocks import load_custom_stocks
-                    for cs in load_custom_stocks():
-                        all_names[cs["ticker"]] = cs["name"]
-
-                    # シグナルテーブルの番号で検索（例: 「3番」「No.3」「シグナル3」）
-                    import re
-                    try:
-                        sig_table = get_signal_table()
-                    except Exception:
-                        sig_table = None
-                    number_matches = re.findall(r'(?:No\.?|番号|シグナル|#)\s*(\d+)|(\d+)\s*(?:番|号)', prompt)
-                    matched_rows_context = ""
-                    for match in number_matches:
-                        num = int(match[0] or match[1])
-                        if sig_table is not None and 1 <= num <= len(sig_table):
-                            row = sig_table[sig_table["No."] == num].iloc[0]
-                            t = row["ティッカー"]
-                            if t not in mentioned_tickers:
-                                mentioned_tickers.append(t)
-                            # シグナルテーブルの行データを直接含める
-                            matched_rows_context += f"\n=== シグナルNo.{num}: {row['銘柄']} ({t}) ===\n"
-                            for col in sig_table.columns:
-                                if col != "No.":
-                                    matched_rows_context += f"{col}: {row[col]}\n"
-
-                    # 銘柄名・ティッカーで検索
-                    prompt_upper = prompt.upper()
-                    for ticker, name in all_names.items():
-                        code = ticker.replace(".T", "")
-                        if (name in prompt or ticker in prompt
-                            or code in prompt
-                            or name.upper() in prompt_upper):
-                            if ticker not in mentioned_tickers:
-                                mentioned_tickers.append(ticker)
-
-                    # 銘柄コード直接入力にも対応 (例: "7794")
-                    codes_in_prompt = re.findall(r'\b(\d{4})\b', prompt)
-                    for code in codes_in_prompt:
-                        t = f"{code}.T"
-                        if t not in mentioned_tickers and (t in all_names or t in TICKERS):
-                            mentioned_tickers.append(t)
-                        elif t not in mentioned_tickers:
-                            for cs in load_custom_stocks():
-                                if cs["ticker"] == t or cs["ticker"].startswith(code):
-                                    if cs["ticker"] not in mentioned_tickers:
-                                        mentioned_tickers.append(cs["ticker"])
-
-                    # シグナル分析のキャッシュデータから全指標を取得
-                    stock_context = ""
-                    try:
-                        df_sig = compute_signals()
-                    except Exception:
-                        df_sig = pd.DataFrame()
-
-                    for ticker in mentioned_tickers[:3]:
-                        name = all_names.get(ticker, ticker)
-                        td = df_sig[df_sig["Ticker"] == ticker] if not df_sig.empty else pd.DataFrame()
-
-                        if not td.empty:
-                            latest = td.iloc[-1]
-                            feature_cols = [c for c in td.columns if c not in
-                                            {"Open","High","Low","Close","Volume","Ticker","Future_return","Target","Signal","Signal_prob"}]
-
-                            stock_context += f"\n=== {name} ({ticker}) ===\n"
-                            stock_context += f"AIシグナル確率: {latest.get('Signal_prob', 'N/A'):.1%}\n"
-                            stock_context += f"AI判定: {'BUY' if latest.get('Signal') == 1 else '見送り'}\n"
-                            stock_context += f"終値: {latest['Close']:,.0f}円\n"
-
-                            # 主要テクニカル指標
-                            for col, label in [
-                                ("RSI_14", "RSI(14)"), ("RSI_9", "RSI(9)"),
-                                ("MACD", "MACD"), ("MACD_signal", "MACDシグナル"), ("MACD_hist", "MACDヒストグラム"),
-                                ("ADX", "ADX(トレンド強度)"),
-                                ("SMA_5", "SMA5"), ("SMA_20", "SMA20"), ("SMA_60", "SMA60"),
-                                ("EMA_5", "EMA5"), ("EMA_20", "EMA20"), ("EMA_60", "EMA60"),
-                                ("SMA_5_deviation", "SMA5乖離率"), ("SMA_20_deviation", "SMA20乖離率"), ("SMA_60_deviation", "SMA60乖離率"),
-                                ("BB_upper", "ボリンジャー上限"), ("BB_lower", "ボリンジャー下限"), ("BB_width", "BB幅"), ("BB_position", "BB位置"),
-                                ("ATR_14", "ATR(平均値幅)"),
-                                ("Stoch_K", "ストキャス%K"), ("Stoch_D", "ストキャス%D"),
-                                ("ROC_1", "1日変化率"), ("ROC_5", "5日変化率"), ("ROC_10", "10日変化率"), ("ROC_20", "20日変化率"),
-                                ("Volume_ratio", "出来高比率"), ("OBV", "OBV"),
-                                ("Body_ratio", "ローソク実体比"), ("Upper_shadow", "上ヒゲ"), ("Lower_shadow", "下ヒゲ"),
-                                ("High_10_pos", "10日高安位置"), ("High_20_pos", "20日高安位置"),
-                            ]:
-                                val = latest.get(col)
-                                if val is not None and pd.notna(val) and val != -999:
-                                    stock_context += f"{label}: {val:.4f}\n"
-
-                            # ファンダメンタルズ
-                            for col, label in [
-                                ("PER", "PER"), ("Forward_PER", "予想PER"), ("PBR", "PBR"), ("PSR", "PSR"),
-                                ("EV_EBITDA", "EV/EBITDA"), ("Dividend_yield", "配当利回り"),
-                                ("ROE", "ROE"), ("ROA", "ROA"),
-                                ("Profit_margin", "純利益率"), ("Operating_margin", "営業利益率"), ("Gross_margin", "粗利率"),
-                                ("Revenue_growth", "売上成長率"), ("Earnings_growth", "利益成長率"),
-                                ("Debt_to_equity", "負債/自己資本"), ("Current_ratio", "流動比率"),
-                                ("Market_cap", "時価総額"), ("Target_upside", "目標株価乖離率"),
-                                ("Recommendation", "アナリスト推奨"),
-                            ]:
-                                val = latest.get(col)
-                                if val is not None and pd.notna(val) and val != -999:
-                                    stock_context += f"{label}: {val}\n"
-
-                            # 市場コンテキスト
-                            for col, label in [
-                                ("N225_return_1d", "日経225 1日リターン"), ("N225_return_5d", "日経225 5日リターン"),
-                                ("N225_RSI", "日経225 RSI"), ("N225_trend", "日経225トレンド"),
-                                ("USDJPY_level", "ドル円"), ("VIX_level", "VIX"),
-                            ]:
-                                val = latest.get(col)
-                                if val is not None and pd.notna(val) and val != -999:
-                                    stock_context += f"{label}: {val}\n"
-
-                            # AI分析
-                            for col, label in [
-                                ("AI_sentiment", "AIニュース感情"), ("AI_confidence", "AI確信度"), ("AI_outlook", "AI見通し"),
-                            ]:
-                                val = latest.get(col)
-                                if val is not None and pd.notna(val) and val != -999:
-                                    stock_context += f"{label}: {val}\n"
-                        else:
-                            # カスタム銘柄: テクニカル分析を実行して全指標を渡す
-                            try:
-                                from custom_stocks import analyze_custom_stock
-                                from data_fetcher import fetch_stock_data
-                                from features import add_technical_features
-
-                                cdf = fetch_stock_data(ticker, years=1)
-                                if not cdf.empty:
-                                    cdf = add_technical_features(cdf)
-                                    cdf = cdf.dropna()
-                                    if not cdf.empty:
-                                        latest = cdf.iloc[-1]
-                                        stock_context += f"\n=== {name} ({ticker}) ===\n"
-                                        stock_context += f"終値: {latest['Close']:,.0f}円\n"
-
-                                        # モデルでシグナル確率を算出
-                                        try:
-                                            model = load_model()
-                                            feat_cols = get_feature_columns(cdf)
-                                            X_custom = cdf[feat_cols].tail(1)
-                                            X_custom = model._align_features(X_custom)
-                                            prob = float(model.predict_proba(X_custom)[0])
-                                            stock_context += f"AIシグナル確率: {prob:.1%}\n"
-                                            stock_context += f"AI判定: {'BUY' if prob >= 0.5 else '見送り'}\n"
-                                        except Exception:
-                                            pass
-
-                                        # 全テクニカル指標
-                                        for col, label in [
-                                            ("RSI_14", "RSI(14)"), ("RSI_9", "RSI(9)"),
-                                            ("MACD", "MACD"), ("MACD_signal", "MACDシグナル"), ("MACD_hist", "MACDヒストグラム"),
-                                            ("ADX", "ADX"), ("SMA_5", "SMA5"), ("SMA_20", "SMA20"), ("SMA_60", "SMA60"),
-                                            ("SMA_5_deviation", "SMA5乖離率"), ("SMA_20_deviation", "SMA20乖離率"),
-                                            ("BB_width", "BB幅"), ("BB_position", "BB位置"), ("ATR_14", "ATR"),
-                                            ("Stoch_K", "ストキャス%K"), ("Stoch_D", "ストキャス%D"),
-                                            ("ROC_1", "1日変化率"), ("ROC_5", "5日変化率"), ("ROC_20", "20日変化率"),
-                                            ("Volume_ratio", "出来高比率"), ("OBV", "OBV"),
-                                        ]:
-                                            val = latest.get(col)
-                                            if val is not None and pd.notna(val):
-                                                stock_context += f"{label}: {val:.4f}\n"
-
-                                        # ファンダメンタルズ
-                                        import yfinance as yf
-                                        info = yf.Ticker(ticker).info or {}
-                                        for key, label in [
-                                            ("trailingPE", "PER"), ("priceToBook", "PBR"),
-                                            ("returnOnEquity", "ROE"), ("returnOnAssets", "ROA"),
-                                            ("dividendYield", "配当利回り"), ("profitMargins", "純利益率"),
-                                            ("revenueGrowth", "売上成長率"), ("earningsGrowth", "利益成長率"),
-                                            ("debtToEquity", "負債/自己資本"),
-                                        ]:
-                                            val = info.get(key)
-                                            if val is not None:
-                                                stock_context += f"{label}: {val}\n"
-                            except Exception:
-                                pass
-
-                    # Claude APIで回答生成
-                    system_prompt = """あなたは日本株の専門アナリストAIです。
-ユーザーの質問に対して、提供された実際の分析データ（90個の特徴量から算出）を基に回答してください。
-
-提供データについて:
-- AIシグナル確率: LightGBM+XGBoostアンサンブルモデルが90特徴量から算出した「今後数日で目標リターン以上上昇する確率」
-- テクニカル指標: RSI, MACD, 移動平均, ボリンジャーバンド, ATR, ストキャスティクス, ROC, ADX, OBV等
-- ファンダメンタルズ: PER, PBR, ROE, ROA, 利益率, 成長率, 配当利回り, アナリスト推奨等
-- 市場環境: 日経225動向, ドル円, VIX等
+--- 売買シグナル一覧 ---
+{table_text}
+--- ここまで ---
 
 回答ルール:
-- 提供データの具体的な数値を使って根拠を示す（「データによると...」ではなく数値を直接引用）
-- シグナル確率がなぜその値になったか、どの指標が影響しているかを分析する
-- テクニカルとファンダメンタルズの両面から総合判断する
+- 上記テーブルのデータを使って具体的な数値で根拠を示す
+- シグナル確率、RSI、MACD、RSI判定、MACD判定、推奨保有、保有理由の値を引用する
 - 「買い」「売り」「保有」の判断を明確に述べる
 - リスクも必ず言及する
 - 日本語で簡潔に回答する"""
 
-                    # シグナルテーブルの行データとstock_contextを統合
-                    all_context = matched_rows_context + stock_context
-                    user_msg = prompt
-                    if all_context:
-                        user_msg = f"以下の銘柄データ（AIシグナルシステムの実際の分析結果）を基に回答してください:\n{all_context}\n\n質問: {prompt}"
+            if "chat_messages" not in st.session_state:
+                st.session_state.chat_messages = []
 
-                    try:
-                        client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
-                        response = client.messages.create(
-                            model="claude-haiku-4-5-20251001",
-                            max_tokens=1000,
-                            system=system_prompt,
-                            messages=[
-                                *[{"role": m["role"], "content": m["content"]}
-                                  for m in st.session_state.chat_messages[-6:]],
-                            ],
-                        )
-                        reply = response.content[0].text
-                    except Exception as e:
-                        reply = f"エラーが発生しました: {e}"
+            for msg in st.session_state.chat_messages:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
 
-                    st.markdown(reply)
-                    st.session_state.chat_messages.append({"role": "assistant", "content": reply})
+            if prompt := st.chat_input("例: 2番はなんで買いシグナル？ / トヨタは今買い時？"):
+                st.session_state.chat_messages.append({"role": "user", "content": prompt})
+                with st.chat_message("user"):
+                    st.markdown(prompt)
 
-        # クリアボタン
-        if st.sidebar.button("チャット履歴をクリア"):
-            st.session_state.chat_messages = []
-            st.rerun()
+                with st.chat_message("assistant"):
+                    with st.spinner("分析中..."):
+                        try:
+                            client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+                            messages = [{"role": m["role"], "content": m["content"]}
+                                        for m in st.session_state.chat_messages[-8:]]
+                            response = client.messages.create(
+                                model="claude-haiku-4-5-20251001",
+                                max_tokens=1500,
+                                system=chat_system,
+                                messages=messages,
+                            )
+                            reply = response.content[0].text
+                        except Exception as e:
+                            reply = f"エラー: {e}"
+
+                        st.markdown(reply)
+                        st.session_state.chat_messages.append({"role": "assistant", "content": reply})
+
+            if st.button("チャット履歴をクリア"):
+                st.session_state.chat_messages = []
+                st.rerun()
+
+    except Exception as e:
+        st.error(f"モデル読み込みエラー: {e}")
+        st.info("先に `python main.py train` を実行してください")
+
 
 
 # ========== マイポートフォリオ ==========

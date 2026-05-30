@@ -7,7 +7,13 @@ from config import TICKERS, DATA_PERIOD_YEARS
 
 
 def fetch_stock_data(ticker: str, years: int = DATA_PERIOD_YEARS) -> pd.DataFrame:
-    """1銘柄の株価データを取得"""
+    """1銘柄の株価データを取得（J-Quants優先）"""
+    from jquants_fetcher import is_jquants_available, fetch_stock_data_jquants
+    if is_jquants_available():
+        df = fetch_stock_data_jquants(ticker, years)
+        if not df.empty:
+            return df
+
     end = datetime.now()
     start = end - timedelta(days=years * 365)
     df = yf.download(ticker, start=start, end=end, progress=False)

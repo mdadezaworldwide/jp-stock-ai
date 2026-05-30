@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-JQUANTS_API_KEY = os.environ.get("JQUANTS_API_KEY", "")
+JQUANTS_API_KEY = os.environ.get("JQUANTS_API_KEY", "xpGYSVBrYTYl71ZBlXmQToqLdcY1jQOvazpM0llT8NY")
 BASE_URL = "https://api.jquants.com/v2"
 
 

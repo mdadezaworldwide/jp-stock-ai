@@ -3,8 +3,8 @@ trained_model.pkl
 *.pyc
 .env
 logs/
-paper_trades/
 models/*.tmp
 trained_model.pkl
 *.png
+!backtest_result.png
 .streamlit/secrets.toml

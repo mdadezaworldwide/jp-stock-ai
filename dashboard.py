@@ -2,6 +2,7 @@
 
 import os
 import sys
+import json
 from pathlib import Path
 
 import streamlit as st
@@ -9,6 +10,29 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+SIGNAL_DATA_DIR = Path(__file__).parent / "signal_data"
+LAST_UPDATED_FILE = SIGNAL_DATA_DIR / "last_updated.json"
+
+
+def _show_last_updated(job_key: str | None = None):
+    """signal_data/last_updated.json から最終更新時刻を表示"""
+    if not LAST_UPDATED_FILE.exists():
+        st.caption("最終更新: 未実行")
+        return
+    try:
+        with open(LAST_UPDATED_FILE, encoding="utf-8") as f:
+            summary = json.load(f)
+    except Exception:
+        st.caption("最終更新: 不明")
+        return
+    if job_key and job_key in summary.get("jobs", {}):
+        j = summary["jobs"][job_key]
+        ts = j.get("finished_at", "?")
+        status = "成功" if j.get("status") == "ok" else f"失敗 ({j.get('error', '?')[:40]})"
+        st.caption(f"最終更新: {ts} ({status})")
+    else:
+        st.caption(f"最終更新: {summary.get('run_at', '?')}")
 
 # プロジェクトルートをパスに追加
 sys.path.insert(0, str(Path(__file__).parent))
@@ -467,12 +491,7 @@ FCF: {fins.get('フリーCF')} / 営業CF: {fins.get('営業CF')}
 # ========== シグナル ==========
 if page == "シグナル":
     st.title("売買シグナル")
-
-    # データ更新ボタン
-    if st.button("データを最新に更新"):
-        st.cache_data.clear()
-        st.cache_resource.clear()
-        st.rerun()
+    _show_last_updated("signals")
 
     # 保有期間の切り替え
     hold_period = st.radio(
@@ -502,9 +521,7 @@ if page == "シグナル":
                     from custom_stocks import add_custom_stock
                     ok, msg = add_custom_stock(add_ticker.strip(), add_name.strip())
                     if ok:
-                        st.success(msg)
-                        st.cache_data.clear()
-                        st.rerun()
+                        st.success(f"{msg}（分析結果は次回データ更新時に反映されます）")
                     else:
                         st.warning(msg)
 
@@ -544,70 +561,42 @@ if page == "シグナル":
 elif page == "デイトレアラート":
     st.title("デイトレアラート")
     st.caption("翌日+1%以上が期待される銘柄をAIが検出")
+    _show_last_updated("alerts")
 
-    if st.button("今すぐスキャン", type="primary"):
-        with st.spinner("500銘柄をスキャン中..."):
-            try:
-                from alert_monitor import scan_daily_signals
-                alerts = scan_daily_signals(top_n=20)
+    alerts_csv = SIGNAL_DATA_DIR / "daily_alerts.csv"
+    if alerts_csv.exists():
+        alert_df = pd.read_csv(alerts_csv)
+        if not alert_df.empty:
+            def color_urgency(row):
+                u = row.get("緊急度", "")
+                if u == "高":
+                    return ["background-color: #d4edda"] * len(row)
+                elif u == "中":
+                    return ["background-color: #e8f5e9"] * len(row)
+                return [""] * len(row)
 
-                if alerts:
-                    alert_df = pd.DataFrame(alerts)
+            st.subheader(f"検出: {len(alert_df)}銘柄")
+            st.dataframe(
+                alert_df.style.apply(color_urgency, axis=1).format({
+                    "終値": "{:,.0f}",
+                    "シグナル確率": "{:.1%}",
+                    "RSI": "{:.1f}",
+                    "MACD": "{:.2f}",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
 
-                    def color_urgency(row):
-                        u = row["緊急度"]
-                        if u == "高":
-                            return ["background-color: #d4edda"] * len(row)
-                        elif u == "中":
-                            return ["background-color: #e8f5e9"] * len(row)
-                        return [""] * len(row)
-
-                    st.subheader(f"検出: {len(alerts)}銘柄")
-                    st.dataframe(
-                        alert_df.style.apply(color_urgency, axis=1).format({
-                            "終値": "{:,.0f}",
-                            "シグナル確率": "{:.1%}",
-                            "RSI": "{:.1f}",
-                            "MACD": "{:.2f}",
-                        }),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-
-                    st.markdown("""
+            st.markdown("""
 **緊急度の見方:**
 - **高（確率60%+）**: 強い買いシグナル、翌日寄付で買い推奨
 - **中（確率50%+）**: 買い候補、他の指標も確認
 - **低（確率45%+）**: 参考程度、慎重に判断
 """)
-                else:
-                    st.info("現在、強い短期シグナルは検出されませんでした")
-            except Exception as e:
-                st.error(f"スキャンエラー: {e}")
-
-    # アラート履歴
-    alert_log = Path(__file__).parent / "logs" / "daily_alerts.csv"
-    if alert_log.exists():
-        st.subheader("過去のアラート履歴")
-        try:
-            hist = pd.read_csv(alert_log)
-            st.dataframe(hist.tail(50), use_container_width=True, hide_index=True)
-        except Exception:
-            pass
-
-    st.markdown("---")
-    st.markdown("""
-### 自動監視の使い方
-ターミナルで以下を実行すると、毎日15:30以降に自動スキャン→LINE/Discord通知：
-```
-python alert_monitor.py
-```
-
-リアルタイム監視（auカブコム証券口座が必要）：
-```
-python realtime_scanner.py
-```
-""")
+        else:
+            st.info("現在、強い短期シグナルは検出されませんでした")
+    else:
+        st.warning("アラートデータがまだ生成されていません。次回のデータ更新までお待ちください。")
 
 
 # ========== マイポートフォリオ ==========
@@ -616,9 +605,10 @@ elif page == "マイポートフォリオ":
     st.caption("実際に買った銘柄を記録し、AIが売り時を判定します")
 
     from portfolio_tracker import (
-        load_holdings, add_holding, remove_holding, check_sell_signals,
+        load_holdings, add_holding, remove_holding,
         TRADE_HISTORY_FILE,
     )
+    _show_last_updated("portfolio")
 
     # --- 銘柄追加フォーム ---
     with st.expander("買い記録を追加", expanded=False):
@@ -647,8 +637,7 @@ elif page == "マイポートフォリオ":
 
         if st.button("記録する", type="primary"):
             add_holding(buy_ticker, buy_price, buy_shares, buy_date.strftime("%Y-%m-%d"))
-            st.success(f"{TICKER_NAMES.get(buy_ticker, buy_ticker)} を記録しました")
-            st.rerun()
+            st.success(f"{TICKER_NAMES.get(buy_ticker, buy_ticker)} を記録しました（売り判定は次回データ更新時に反映されます）")
 
     # --- 売り判定 ---
     holdings = load_holdings()
@@ -656,11 +645,21 @@ elif page == "マイポートフォリオ":
     if holdings:
         st.subheader("保有銘柄 — AIの売り判定")
 
-        with st.spinner("売り判定を分析中..."):
-            sell_signals = check_sell_signals()
+        portfolio_csv = SIGNAL_DATA_DIR / "portfolio_signals.csv"
+        if portfolio_csv.exists():
+            sell_df = pd.read_csv(portfolio_csv)
+            # holdings に無い銘柄は除外、holdings にあるが分析未済の銘柄は別途表示
+            held_tickers = {h["ticker"] for h in holdings}
+            if not sell_df.empty and "ティッカー" in sell_df.columns:
+                sell_df = sell_df[sell_df["ティッカー"].isin(held_tickers)]
+            unanalyzed = held_tickers - (set(sell_df["ティッカー"].tolist()) if not sell_df.empty else set())
+            if unanalyzed:
+                st.info(f"未分析の銘柄 ({len(unanalyzed)}件): 次回データ更新で反映されます — " + ", ".join(unanalyzed))
+        else:
+            sell_df = pd.DataFrame()
+            st.warning("売り判定データがまだ生成されていません。")
 
-        if sell_signals:
-            sell_df = pd.DataFrame(sell_signals)
+        if not sell_df.empty:
 
             # 緊急度でソート
             urgency_order = {"高": 0, "中": 1, "低": 2}
@@ -768,8 +767,9 @@ elif page == "マイポートフォリオ":
 elif page == "カスタム銘柄分析":
     st.title("カスタム銘柄分析")
     st.caption("プライム株以外の銘柄も自由に追加して分析できます")
+    _show_last_updated("custom")
 
-    from custom_stocks import load_custom_stocks, add_custom_stock, remove_custom_stock, analyze_custom_stock
+    from custom_stocks import load_custom_stocks, add_custom_stock, remove_custom_stock
 
     # --- 銘柄追加フォーム ---
     with st.expander("銘柄を追加", expanded=True):
@@ -784,8 +784,7 @@ elif page == "カスタム銘柄分析":
             if new_ticker:
                 ok, msg = add_custom_stock(new_ticker.strip(), new_name.strip())
                 if ok:
-                    st.success(msg)
-                    st.rerun()
+                    st.success(f"{msg}（分析結果は次回データ更新時に反映されます）")
                 else:
                     st.warning(msg)
 
@@ -805,33 +804,13 @@ elif page == "カスタム銘柄分析":
 
         st.markdown("---")
 
-        # 全銘柄分析
-        with st.spinner("分析中..."):
-            results = []
-            for s in custom_stocks:
-                analysis = analyze_custom_stock(s["ticker"])
-                if "error" not in analysis:
-                    results.append({
-                        "銘柄": s["name"],
-                        "ティッカー": s["ticker"],
-                        "現在値": analysis["current"],
-                        "テクニカル判定": analysis["signal"],
-                        "RSI": analysis["rsi"],
-                        "RSI判定": analysis["rsi_label"],
-                        "MACD": analysis["macd_hist"],
-                        "MACD判定": analysis["macd_label"],
-                        "トレンド": analysis["trend"],
-                        "推奨保有": analysis["hold_label"],
-                        "保有理由": analysis["hold_reason"],
-                        "5日リターン": analysis["ret_5d"],
-                        "20日リターン": analysis["ret_20d"],
-                    })
-
-            if results:
-                res_df = pd.DataFrame(results)
-
+        # 全銘柄分析 (事前計算CSV読み込み)
+        custom_csv = SIGNAL_DATA_DIR / "custom_analysis.csv"
+        if custom_csv.exists():
+            res_df = pd.read_csv(custom_csv)
+            if not res_df.empty:
                 def color_signal(row):
-                    s = row["テクニカル判定"]
+                    s = str(row.get("判定", ""))
                     if "強い買い" in s:
                         return ["background-color: #d4edda"] * len(row)
                     elif "買い" in s:
@@ -844,13 +823,14 @@ elif page == "カスタム銘柄分析":
                     res_df.style.apply(color_signal, axis=1).format({
                         "現在値": "{:,.0f}",
                         "RSI": "{:.1f}",
-                        "MACD": "{:.2f}",
                         "5日リターン": "{:+.1%}",
                         "20日リターン": "{:+.1%}",
                     }),
                     use_container_width=True,
                     hide_index=True,
                 )
+        else:
+            st.warning("カスタム銘柄分析データがまだ生成されていません。次回のデータ更新までお待ちください。")
 
         # 個別チャート
         st.markdown("---")
@@ -861,12 +841,10 @@ elif page == "カスタム銘柄分析":
         )
 
         if selected:
-            analysis = analyze_custom_stock(selected)
-            if "error" not in analysis:
-                name = next((s["name"] for s in custom_stocks if s["ticker"] == selected), selected)
-
-                # チャート
-                hist = analysis["hist"]
+            name = next((s["name"] for s in custom_stocks if s["ticker"] == selected), selected)
+            hist_csv = SIGNAL_DATA_DIR / "custom_hist" / f"{selected}.csv"
+            if hist_csv.exists():
+                hist = pd.read_csv(hist_csv, index_col=0, parse_dates=True)
                 fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
                                     row_heights=[0.7, 0.3], vertical_spacing=0.05)
                 fig.add_trace(go.Candlestick(
@@ -891,9 +869,14 @@ elif page == "カスタム銘柄分析":
                     xaxis_rangeslider_visible=False, height=500,
                 )
                 st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info(f"{name} のチャートデータは次回更新時に生成されます")
 
-                # ファンダメンタルズ
-                fund = analysis.get("fundamentals", {})
+            # ファンダメンタルズ (事前計算JSON)
+            info_json = SIGNAL_DATA_DIR / "custom_info" / f"{selected}.json"
+            if info_json.exists():
+                with open(info_json, encoding="utf-8") as f:
+                    fund = json.load(f)
                 if fund:
                     col1, col2, col3, col4 = st.columns(4)
                     col1.metric("PER", f"{fund.get('PER', 'N/A')}")
@@ -927,11 +910,12 @@ elif page == "バックテスト結果":
 # ========== セクター分析 ==========
 elif page == "セクター分析":
     st.title("セクターローテーション分析")
+    _show_last_updated("sector")
 
-    with st.spinner("セクターデータ取得中..."):
+    sector_csv = SIGNAL_DATA_DIR / "sector_rotation.csv"
+    if sector_csv.exists():
         try:
-            from sector_analysis import analyze_sector_rotation
-            sector_df = analyze_sector_rotation()
+            sector_df = pd.read_csv(sector_csv)
 
             if not sector_df.empty:
                 # モメンタムチャート
@@ -958,19 +942,22 @@ elif page == "セクター分析":
                     hide_index=True,
                 )
             else:
-                st.warning("セクターデータを取得できませんでした")
+                st.warning("セクターデータが空です")
         except Exception as e:
             st.error(f"エラー: {e}")
+    else:
+        st.warning("セクターデータがまだ生成されていません。次回のデータ更新までお待ちください。")
 
 
 # ========== イベント分析 ==========
 elif page == "イベント分析":
     st.title("イベントドリブン分析（決算パターン）")
+    _show_last_updated("events")
 
-    with st.spinner("決算データ分析中..."):
+    events_csv = SIGNAL_DATA_DIR / "events.csv"
+    if events_csv.exists():
         try:
-            from event_driven import analyze_all_events
-            event_df = analyze_all_events()
+            event_df = pd.read_csv(events_csv)
 
             valid = event_df[event_df.get("has_data", False) == True]
             if not valid.empty:
@@ -1008,11 +995,14 @@ elif page == "イベント分析":
                 )
         except Exception as e:
             st.error(f"エラー: {e}")
+    else:
+        st.warning("イベント分析データがまだ生成されていません。次回のデータ更新までお待ちください。")
 
 
 # ========== ペーパートレード ==========
 elif page == "ペーパートレード":
     st.title("ペーパートレード状況")
+    _show_last_updated("paper_trade")
 
     state_file = Path(__file__).parent / "paper_trades" / "state.json"
     trade_file = Path(__file__).parent / "paper_trades" / "trades.csv"
@@ -1052,23 +1042,35 @@ elif page == "ペーパートレード":
                 fig.update_layout(title="累積損益推移", yaxis_title="円")
                 st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("ペーパートレードはまだ開始されていません。`python main.py realtime` で開始できます")
+        st.info("ペーパートレードデータがまだ生成されていません。次回のデータ更新までお待ちください（GitHub Actions により毎営業日16:00 JSTに自動更新されます）。")
 
 
 # ========== 銘柄詳細 ==========
 elif page == "銘柄詳細":
     st.title("銘柄詳細分析")
+    _show_last_updated("stock_detail")
+
+    # カスタム銘柄も選択肢に含める
+    from custom_stocks import load_custom_stocks as _load_cs_detail
+    _detail_tickers = list(TICKERS)
+    _detail_names = dict(TICKER_NAMES)
+    for _cs in _load_cs_detail():
+        if _cs["ticker"] not in _detail_tickers:
+            _detail_tickers.append(_cs["ticker"])
+            _detail_names[_cs["ticker"]] = _cs["name"]
 
     ticker = st.selectbox(
         "銘柄を選択",
-        TICKERS,
-        format_func=lambda t: f"{TICKER_NAMES.get(t, t)} ({t})",
+        _detail_tickers,
+        format_func=lambda t: f"{_detail_names.get(t, t)} ({t})",
     )
 
     if ticker:
-        with st.spinner("データ取得中..."):
-            df = fetch_stock_data(ticker, years=1)
+        detail_csv = SIGNAL_DATA_DIR / "stock_detail" / f"{ticker}.csv"
+        detail_info = SIGNAL_DATA_DIR / "stock_detail" / f"{ticker}_info.json"
 
+        if detail_csv.exists():
+            df = pd.read_csv(detail_csv, index_col=0, parse_dates=True)
             if not df.empty:
                 # ローソク足チャート
                 fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
@@ -1094,17 +1096,22 @@ elif page == "銘柄詳細":
                 ), row=2, col=1)
 
                 fig.update_layout(
-                    title=f"{TICKER_NAMES.get(ticker, ticker)} ({ticker})",
+                    title=f"{_detail_names.get(ticker, ticker)} ({ticker})",
                     xaxis_rangeslider_visible=False,
                     height=600,
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
-                # 基本情報
-                from safe_yf import get_info as _get_info
-                info = _get_info(ticker)
+                # 基本情報 (事前計算JSON)
+                if detail_info.exists():
+                    with open(detail_info, encoding="utf-8") as f:
+                        info = json.load(f)
+                else:
+                    info = {}
                 col1, col2, col3, col4 = st.columns(4)
                 col1.metric("PER", f"{info.get('trailingPE', 'N/A')}")
                 col2.metric("PBR", f"{info.get('priceToBook', 'N/A')}")
                 col3.metric("ROE", f"{info.get('returnOnEquity', 'N/A')}")
                 col4.metric("配当利回り", f"{info.get('dividendYield', 'N/A')}")
+        else:
+            st.warning(f"{_detail_names.get(ticker, ticker)} の詳細データはまだ生成されていません。次回のデータ更新までお待ちください。")

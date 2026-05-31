@@ -506,6 +506,9 @@ if page == "シグナル":
     target_pct = target_map[selected_hold_days]
     st.caption(f"「{hold_period}保有して{target_pct}以上上がる確率」を表示")
 
+    # 銘柄検索
+    search_query = st.text_input("銘柄検索", placeholder="銘柄名・ティッカー・セクターで検索（例: ソフトバンク、9984、通信）", key="sig_search")
+
     # カスタム銘柄の追加UI
     with st.expander("銘柄を追加"):
         st.markdown("東証: 銘柄コード + `.T`（例: `3776.T`） / 米国株: そのまま（例: `AAPL`）")
@@ -537,7 +540,15 @@ if page == "シグナル":
 
         sig_df = get_signal_table_period(selected_hold_days)
 
-        if sig_df.empty:
+        # 検索フィルタ適用
+        if search_query:
+            q = search_query.strip().lower()
+            mask = sig_df.apply(lambda row: q in str(row.get("銘柄", "")).lower() or q in str(row.get("ティッカー", "")).lower() or q in str(row.get("セクター", "")).lower(), axis=1)
+            sig_df = sig_df[mask].reset_index(drop=True)
+
+        if sig_df.empty and search_query:
+            st.warning(f"「{search_query}」に一致する銘柄が見つかりません。")
+        elif sig_df.empty:
             st.warning("データが取得できませんでした。「データを最新に更新」ボタンを押してください。")
 
         buy_count = sig_df["判定"].str.contains("買い|BUY", na=False).sum()
